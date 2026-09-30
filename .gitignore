@@ -1,0 +1,13 @@
+# Local build output and runtime data
+/dist/
+/tests/artifacts/
+*.log
+*.test
+coverage.out
+config.ini
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
