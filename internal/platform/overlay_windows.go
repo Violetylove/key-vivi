@@ -27,6 +27,7 @@ const (
 	swpNoMove      = 0x0002
 	swpNoActivate  = 0x0010
 	swpFrameChange = 0x0020
+	swpShowWindow  = 0x0040
 )
 
 type windowRect struct {
