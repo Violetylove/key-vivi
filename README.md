@@ -97,6 +97,7 @@ $env:KEYVIVI_SELFTEST=1; .\dist\KeyVivi.exe
 
 ## 项目文档
 
+- [架构设计](<docs/architecture.md>) — 弃用 Fyne、自绘叠加层的目标架构与迁移步骤
 - [规格与里程碑验收](<docs/project_spec.md>)
 - [计划与当前进度](<docs/PROJECT.md>)
 - [协作规则](<AGENTS.md>)
