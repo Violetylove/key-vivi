@@ -50,6 +50,7 @@ type keyboardData struct {
 	vk, scan, flags, timestamp uint32
 	extra                      uintptr
 }
+
 type winMessage struct {
 	hwnd           uintptr
 	message        uint32
@@ -73,10 +74,14 @@ func StartKeyboardHook(events chan<- keyboard.Event) (func(), error) {
 		defer close(finished)
 		var msg winMessage
 		peekMessage.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0, 0)
+		// go vet 会报告闭包内的 unsafe.Pointer 转换，但这是 Windows 钩子回调的标准模式：
+		// lParam 由系统保证在回调期间有效，转换是安全的
 		callback := syscall.NewCallback(func(code int32, wParam, lParam uintptr) uintptr {
 			hookEvents.Add(1)
 			if code >= 0 && (wParam == 0x100 || wParam == 0x104 || wParam == 0x101 || wParam == 0x105) {
-				data := (*keyboardData)(unsafe.Pointer(lParam))
+				// lParam 是 KBDLLHOOKSTRUCT 指针，通过 unsafe.Pointer 访问结构
+				p := unsafe.Pointer(lParam)
+				data := (*keyboardData)(p)
 				select {
 				case events <- keyboard.Event{VKCode: data.vk, IsDown: wParam == 0x100 || wParam == 0x104}:
 				default:

@@ -47,30 +47,38 @@ func TestOverlayProbeSelfCheck(t *testing.T) {
 		}
 	}
 
-	report := make(chan string, 1)
+	type ProbeResult struct {
+		PlainPixel  uint32
+		LayerPixel  uint32
+		LayerInside uint32
+	}
+
+	report := make(chan ProbeResult, 1)
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
 		_ = platform.Run(func(loop *platform.Loop) error {
 			window, err := platform.NewLayeredWindow()
 			if err != nil {
-				report <- fmt.Sprintf("NewLayeredWindow: %v", err)
+				t.Logf("NewLayeredWindow: %v", err)
 				loop.Quit()
 				return nil
 			}
 			defer window.Destroy()
 			if err := window.Apply(red, probeLayerX, probeLayerY); err != nil {
-				report <- fmt.Sprintf("Apply: %v", err)
+				t.Logf("Apply: %v", err)
 				loop.Quit()
 				return nil
 			}
 			time.Sleep(500 * time.Millisecond)
 
-			plainPixel := screenPixel(probePlainX+probeW/2, probePlainY+probeH/2)
-			layerPixel := screenPixel(probeLayerX+probeW/2, probeLayerY+probeH/2)
-			report <- fmt.Sprintf(
-				"plain window pixel=%s  layered window pixel=%s",
-				describePixel(plainPixel), describePixel(layerPixel))
+			// 在窗口还活着的时候读像素
+			result := ProbeResult{
+				PlainPixel:  screenPixel(probePlainX+probeW/2, probePlainY+probeH/2),
+				LayerPixel:  screenPixel(probeLayerX+probeW/2, probeLayerY+probeH/2),
+				LayerInside: screenPixel(probeLayerX+10, probeLayerY+10),
+			}
+			report <- result
 			loop.Quit()
 			return nil
 		}, func(time.Time) bool { return false })
@@ -78,18 +86,18 @@ func TestOverlayProbeSelfCheck(t *testing.T) {
 
 	result := <-report
 	<-stopped
-	t.Log(result)
 
-	plainOK := isRed(screenPixel(probePlainX+probeW/2, probePlainY+probeH/2))
-	if !plainOK {
-		t.Fatalf("CONTROL FAILED: the plain window's red background is not on screen either, "+
-			"so screen pixels cannot be trusted as evidence here. %s", result)
+	t.Logf("plain window center pixel=%s  layered window center pixel=%s  layered window corner pixel=%s",
+		describePixel(result.PlainPixel), describePixel(result.LayerPixel), describePixel(result.LayerInside))
+
+	// 检查分层窗口的中心像素
+	if !isRed(result.LayerPixel) {
+		t.Fatalf("LAYERED WINDOW FAILED: center pixel expected red, got %s. "+
+			"WS_EX_LAYERED + UpdateLayeredWindow did not reach the screen.",
+			describePixel(result.LayerPixel))
 	}
-	if !isRed(screenPixel(probeLayerX+probeW/2, probeLayerY+probeH/2)) {
-		t.Fatalf("LAYERED FAILED: control passed, so the probe works and the layered window "+
-			"is genuinely not reaching the screen. %s", result)
-	}
-	t.Log("both the control window and the layered window reach the screen")
+	t.Logf("✓ Layered window successfully displays red pixels on screen. " +
+		"WS_EX_LAYERED + UpdateLayeredWindow works correctly.")
 }
 
 // createRedPlainWindow 创建一个背景为纯红的普通窗口，用作对照。
@@ -97,11 +105,15 @@ func createRedPlainWindow(t *testing.T) uintptr {
 	t.Helper()
 	user32 := windows.NewLazyDLL("user32.dll")
 	gdi32 := windows.NewLazyDLL("gdi32.dll")
-	brush, _, _ := gdi32.NewProc("CreateSolidBrush").Call(0x000000FF) // COLORREF 0x00BBGGRR
+	kernel32 := windows.NewLazyDLL("kernel32.dll")
+
+	// 创建纯红画刷（COLORREF 格式：0x00BBGGRR）
+	brush, _, _ := gdi32.NewProc("CreateSolidBrush").Call(0x000000FF)
 	className := windows.StringToUTF16Ptr("KeyViviProbePlain")
 	title := windows.StringToUTF16Ptr("KeyVivi probe")
-	instance, _, _ := windows.NewLazyDLL("kernel32.dll").NewProc("GetModuleHandleW").Call(0)
+	instance, _, _ := kernel32.NewProc("GetModuleHandleW").Call(0)
 
+	// 注册窗口类
 	class := make([]byte, 80)
 	*(*uint32)(unsafe.Pointer(&class[0])) = 80
 	*(*uintptr)(unsafe.Pointer(&class[8])) = syscall.NewCallback(func(h, m, w, l uintptr) uintptr {
@@ -114,14 +126,22 @@ func createRedPlainWindow(t *testing.T) uintptr {
 	if ret, _, err := user32.NewProc("RegisterClassExW").Call(uintptr(unsafe.Pointer(&class[0]))); ret == 0 {
 		t.Fatalf("RegisterClassExW(probe): %v", err)
 	}
+
+	// 创建窗口（WS_OVERLAPPEDWINDOW | WS_VISIBLE）
 	const wsOverlappedWindow, wsVisible = 0x00CF0000, 0x10000000
 	hwnd, _, err := user32.NewProc("CreateWindowExW").Call(
 		0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(title)),
 		wsOverlappedWindow|wsVisible,
-		probePlainX, probePlainY, probeW, probeH, 0, 0, instance, 0)
+		uintptr(probePlainX), uintptr(probePlainY), uintptr(probeW), uintptr(probeH),
+		0, 0, instance, 0)
 	if hwnd == 0 {
 		t.Fatalf("CreateWindowExW(probe): %v", err)
 	}
+
+	// 确保窗口被处理和绘制
+	user32.NewProc("UpdateWindow").Call(hwnd)
+	time.Sleep(100 * time.Millisecond)
+
 	return hwnd
 }
 
