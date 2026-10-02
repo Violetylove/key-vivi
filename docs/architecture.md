@@ -148,20 +148,27 @@ cmd ─▶ app ─▶ display ─▶ keyboard
 // internal/render
 type Theme struct {
     TextColor color.RGBA // 默认 #FFFFFF
-    BarColor  color.RGBA // 默认 rgba(10,13,18,0.75)
+    BarColor  color.RGBA // 默认 rgba(10,13,18,0.75)，按直通 alpha 书写
     FontSize  float64    // 逻辑像素，默认 18
     PaddingX  float64    // 左右内边距，默认 24
     PaddingY  float64    // 上下内边距，默认 12
     Radius    float64    // 圆角半径，默认 8
-    Gap       float64    // 队列项之间的间隔，默认 24
     Separator string     // 队列项之间的分隔符，默认 "  |  "
+    MinWidth  float64    // 宽度下限，默认 200
 }
 
-// Bar 把队列内容渲染成一张带 alpha 的字幕位图。scale 为 DPI 缩放（1.0 = 96dpi）。
+// Bar 把要显示的内容渲染成一张带 alpha 的字幕位图，宽度按内容自适应。
+// scale 为 DPI 缩放（1.0 = 96dpi），alpha 用于淡入淡出。
 func Bar(items []string, th Theme, alpha, scale float64) (*image.RGBA, error)
 
-// Measure 只算尺寸，不画，供窗口提前定位。
+// Measure 只算尺寸不绘制，供窗口提前定位。
 func Measure(items []string, th Theme, scale float64) (width, height int, err error)
+
+// Fit 返回能在 maxWidth 内放下的队尾子集：超宽时从最旧的一项开始丢弃，
+// 因为最新输入最重要。宽度上限由调用方按工作区宽度给出。
+func Fit(items []string, th Theme, scale, maxWidth float64) []string
+
+var ErrNoItems error // 没有可显示内容
 
 
 // internal/platform
@@ -248,7 +255,7 @@ func Run() // 装配全部组件并进入 UI 循环
 
 | 步 | 内容 | 验证方式 |
 |---|---|---|
-| 1 | 新建 `internal/render`（theme/text/surface/bar）+ 单测 | `go test ./internal/render`：尺寸、圆角外像素透明、整体 alpha、空队列 |
+| 1 | 新建 `internal/render`（theme/text/surface/bar）+ 单测 | `go test ./tests/unit`：尺寸随内容、圆角外透明、整体 alpha 线性、DPI 缩放、Fit 丢最旧、空输入报错 |
 | 2 | `internal/platform` 新增 `window_windows.go`（消息窗口 + `Run` 循环）与 `layered_windows.go` | 集成测试：窗口样式、`Apply` 返回成功、位置在底部居中 |
 | 3 | `internal/platform` 新增 `tray_windows.go` | 集成测试：图标可添加/更新/删除不报错；菜单项构造正确 |
 | 4 | 新建 `internal/app`（装配 + 动画 + 开关），`cmd/keyvivi/main.go` 切到 `app.Run()`；`internal/ui` 暂留但不再被引用 | 构建成功；`launch.bat` 启动后按键、托盘、暂停、动画全部人工确认 |
