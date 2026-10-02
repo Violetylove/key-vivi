@@ -8,7 +8,7 @@
 - 一律用中文，精炼。只写"为什么这么做"和"约束是什么"，不复述代码在做什么。
 - 单行能说清就不写多行；禁止把实现逐句翻译成注释。
 - 导出标识符用文档注释，首句即结论；补充说明另起一行。
-- 踩过的坑要写进注释：现象 + 原因，例如"不设 WS_EX_LAYERED，否则窗口自报可见却零像素"。
+- 踩过的坑要写进注释：现象 + 原因，例如"固定尺寸窗口会缩到内容最小尺寸，空文本会让字幕塌成缩略图"。
 - 日志字符串保持英文（便于 grep 和对照文档），注释中文化不影响它。
 
 **提交**
@@ -28,7 +28,8 @@
 - **受限令牌会破坏全局键盘钩子与托盘，而级别由 exe 位置决定。** A/B/A/B 实测：同一个 exe 放在代理工作区内启动 = Low（`0x1000`），复制到工作区外启动 = Medium（`0x2000`）；工作区内换启动方式（直接运行、`cmd /c start`、批处理）都无效。Low 下钩子只收得到本进程窗口的按键（焦点在别处没反应），systray 也写不了 Temp 临时图标。**判定环境先看 `integrity level=` 或窗口标题（`KEYVIVI_DEBUG=1` 时标题为 `KeyVivi 0x2000`）**；运行请用 `launch.bat`。不要改代码去"修"钩子或托盘——它们本身没坏。
 - **Fyne 的窗口坐标与可见性归 Fyne 所有。** `SetWindowPos` 设的可见性会被驱动撤销，设的坐标会在下次 `Show()` 被 `doShowAgain()` 用 Fyne 保存的 `xpos/ypos` 覆盖。可见性用 `fyne.Window.Show/Hide`；定位用 `desktop.Window.RequestPosition`（它会同步更新 Fyne 保存的坐标）。`ConfigureOverlay` 现在只负责样式。
 - **固定尺寸窗口会收缩到内容最小尺寸。** 用 `SetFixedSize(true)` 时必须给内容显式 `SetMinSize`，否则空文本会让窗口塌成缩略图，居中算式把它摆到屏幕右侧。
-- **叠加窗口不得设置 `WS_EX_LAYERED`。** 分层窗口走重定向表面合成，GLFW 的 OpenGL 交换不更新它：`IsWindowVisible` 为真、Win32 调用全部成功，屏幕上一个像素都不画。集成测试有回归断言。
+- **`WS_EX_LAYERED` 只在和 OpenGL 同用时才有害。** 旧结论针对 Fyne/GLFW（OpenGL 渲染）：分层窗口走重定向表面合成，GL 交换不更新它，于是 `IsWindowVisible` 为真、Win32 调用全部成功、屏幕上一个像素都不画。自绘方案没有 GL，位图由 `UpdateLayeredWindow` 提交，`WS_EX_LAYERED` 是**必需项**，不是禁忌。
+- **代理自己启动的进程建的窗口不会出现在截图里。** 对照实验：同一进程里开一个再普通不过的 Win32 窗口，`IsWindowVisible` 为真、窗口站在 `WinSta0`、分辨率也对，但截图和 `GetPixel` 都看不到它（很可能是虚拟桌面隔离导致的 DWM 遮蔽）。**因此屏幕上是否可见只能由人在真实桌面确认**，不要用"截图里没有"推断代码有问题，也不要用"某个像素是白的"当作窗口可见的证据（那多半是别的窗口的内容）。
 - 普通测试用 go test -race ./...；真实桌面钩子测试显式使用 go test -race -tags integration ./tests/integration，会注入 F24 事件。
 - 按下/释放状态决定组合输入，不用 300ms 超时猜测意图；左右修饰键分别追踪，组合输入后保留仍按住的键。
 - 后台协程更新 Fyne UI 使用 `fyne.Do` 等调度机制；channel 和 Refresh 不会自动保证 UI 线程安全。
