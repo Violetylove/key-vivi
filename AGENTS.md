@@ -9,7 +9,11 @@
 - 目标与各里程碑验收以 [project_spec.md](<docs/project_spec.md>) 为准；进度和验收证据维护在 [PROJECT.md](<docs/PROJECT.md>)。
 - v0.1 核心验证、v0.5 基本可用、v1.0 最小版本发布、v2.0 增强版分别验收；编译成功不能标记里程碑完成。
 - 用户已确认按键正常；单元测试和 Windows 钩子集成测试通过。完整里程碑仍按逐项证据验收，下方历史“已完成”标记不作为有效进度。
-- 源码放在 cmd/keyvivi 与 internal 下并按 keyboard、platform、ui 模块分工；所有测试放在 tests/unit 或 tests/integration，测试证据在 tests/artifacts，文档在 docs，产物在 dist。禁止将源码、测试或 exe 堆在根目录。
+- 源码放在 cmd/keyvivi 与 internal 下并按 keyboard、platform、ui 模块分工；所有测试放在 tests/unit 或 tests/integration，测试证据在 tests/artifacts，文档在 docs，产物在 dist。禁止将源码、测试或 exe 堆在根目录。例外：被测代码未导出时可在同包内放 `*_test.go`（如 internal/ui/trayicon_test.go），并在文件头注明原因。
+- **受限令牌会破坏全局键盘钩子与托盘，而级别由 exe 位置决定。** A/B/A/B 实测：同一个 exe 放在代理工作区内启动 = Low（`0x1000`），复制到工作区外启动 = Medium（`0x2000`）；工作区内换启动方式（直接运行、`cmd /c start`、批处理）都无效。Low 下钩子只收得到本进程窗口的按键（焦点在别处没反应），systray 也写不了 Temp 临时图标。**判定环境先看 `integrity level=` 或窗口标题（`KEYVIVI_DEBUG=1` 时标题为 `KeyVivi 0x2000`）**；运行请用 `launch.bat`。不要改代码去"修"钩子或托盘——它们本身没坏。
+- **Fyne 的窗口坐标与可见性归 Fyne 所有。** `SetWindowPos` 设的可见性会被驱动撤销，设的坐标会在下次 `Show()` 被 `doShowAgain()` 用 Fyne 保存的 `xpos/ypos` 覆盖。可见性用 `fyne.Window.Show/Hide`；定位用 `desktop.Window.RequestPosition`（它会同步更新 Fyne 保存的坐标）。`ConfigureOverlay` 现在只负责样式。
+- **固定尺寸窗口会收缩到内容最小尺寸。** 用 `SetFixedSize(true)` 时必须给内容显式 `SetMinSize`，否则空文本会让窗口塌成缩略图，居中算式把它摆到屏幕右侧。
+- **叠加窗口不得设置 `WS_EX_LAYERED`。** 分层窗口走重定向表面合成，GLFW 的 OpenGL 交换不更新它：`IsWindowVisible` 为真、Win32 调用全部成功，屏幕上一个像素都不画。集成测试有回归断言。
 - 普通测试用 go test -race ./...；真实桌面钩子测试显式使用 go test -race -tags integration ./tests/integration，会注入 F24 事件。
 - 按下/释放状态决定组合输入，不用 300ms 超时猜测意图；左右修饰键分别追踪，组合输入后保留仍按住的键。
 - 后台协程更新 Fyne UI 使用 `fyne.Do` 等调度机制；channel 和 Refresh 不会自动保证 UI 线程安全。
