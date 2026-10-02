@@ -8,45 +8,30 @@ import (
 	"key-vivi/internal/keyboard"
 )
 
-// Generation checks invalidate expiration callbacks queued before newer input.
-func processKeys(events <-chan keyboard.Event, done <-chan struct{}, show func(string), hide func()) {
-	state := keyboard.NewState()
-	timer := time.NewTimer(time.Hour)
-	timer.Stop()
-	defer timer.Stop()
-	var expiry <-chan time.Time
-	var generation atomic.Uint64
+// eventsSeen counts raw hook events for KEYVIVI_DEBUG diagnostics. It records
+// only a total, never which keys were pressed.
+var eventsSeen atomic.Uint64
+
+func processKeys(events <-chan keyboard.Event, done <-chan struct{}, handle func(keyboard.Event)) {
 	for {
 		select {
 		case <-done:
 			return
 		case event := <-events:
-			value := state.Handle(event, time.Now())
-			if value == "" {
-				continue
-			}
-			if !timer.Stop() {
-				select {
-				case <-timer.C:
-				default:
-				}
-			}
-			timer.Reset(1500 * time.Millisecond)
-			expiry = timer.C
-			token := generation.Add(1)
-			fyne.Do(func() {
-				if generation.Load() == token {
-					show(value)
-				}
-			})
-		case <-expiry:
-			expiry = nil
-			token := generation.Load()
-			fyne.Do(func() {
-				if generation.Load() == token {
-					hide()
-				}
-			})
+			eventsSeen.Add(1)
+			fyne.Do(func() { handle(event) })
+		}
+	}
+}
+func expireQueue(done <-chan struct{}, expire func(time.Time)) {
+	ticker := time.NewTicker(30 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case now := <-ticker.C:
+			fyne.Do(func() { expire(now) })
 		}
 	}
 }
