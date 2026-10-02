@@ -40,3 +40,28 @@ func TestLiveKeyboardHook(t *testing.T) {
 		}
 	}
 }
+
+// TestHookSelfCheck covers the exported self-check path the app uses, including
+// the callback counter, so a passing TestLiveKeyboardHook cannot hide a counter
+// that never advances.
+func TestHookSelfCheck(t *testing.T) {
+	events := make(chan keyboard.Event, 64)
+	stop, err := platform.StartKeyboardHook(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	go func() {
+		for range events {
+		}
+	}()
+	before := platform.HookEventCount()
+	platform.SendTestKey()
+	deadline := time.Now().Add(2 * time.Second)
+	for platform.HookEventCount() == before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if after := platform.HookEventCount(); after == before {
+		t.Fatalf("SendTestKey produced no hook events (before=%d after=%d)", before, after)
+	}
+}
