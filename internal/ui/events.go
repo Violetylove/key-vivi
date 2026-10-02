@@ -8,8 +8,7 @@ import (
 	"key-vivi/internal/keyboard"
 )
 
-// eventsSeen counts raw hook events for KEYVIVI_DEBUG diagnostics. It records
-// only a total, never which keys were pressed.
+// eventsSeen 是供 KEYVIVI_DEBUG 计数的钩子事件总数；只记数量，不记按了哪些键。
 var eventsSeen atomic.Uint64
 
 func processKeys(events <-chan keyboard.Event, done <-chan struct{}, handle func(keyboard.Event)) {

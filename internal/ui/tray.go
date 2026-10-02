@@ -17,8 +17,7 @@ func setupTray(a fyne.App, toggle func(), about func(), paused func() bool) func
 		} else {
 			pause.Label = "暂停"
 		}
-		// The icon carries the state as well as the label: the menu is only
-		// visible while it is open.
+		// 图标也承载状态：菜单只在打开时可见。
 		desk.SetSystemTrayIcon(trayIcon(paused()))
 		menu.Refresh()
 	}

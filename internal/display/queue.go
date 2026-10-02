@@ -14,7 +14,7 @@ type Queue struct{ entries []Entry }
 func (q *Queue) Push(text string, now time.Time) {
 	q.Expire(now)
 	entry := Entry{text, now.Add(1500 * time.Millisecond)}
-	// Counts come from the input state machine; only repeated input updates the tail.
+	// 计数来自输入状态机；只有重复输入才更新队尾。
 	if strings.Contains(text, " ×") && len(q.entries) > 0 && base(q.entries[len(q.entries)-1].Text) == base(text) {
 		q.entries[len(q.entries)-1] = entry
 	} else {

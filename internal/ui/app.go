@@ -21,9 +21,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// debugf writes troubleshooting detail to stderr when KEYVIVI_DEBUG is set.
-// Window placement and visibility depend on the desktop, so field reports need
-// evidence rather than guesses. It never logs key content.
+// debugf 在 KEYVIVI_DEBUG 设置时向 stderr 输出排查信息；只记数量，不记按键内容。
 func debugf(format string, args ...any) {
 	if os.Getenv("KEYVIVI_DEBUG") == "" {
 		return
@@ -31,9 +29,7 @@ func debugf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "[keyvivi] "+format+"\n", args...)
 }
 
-// readyHintDuration returns how long the startup hint stays on screen.
-// KEYVIVI_READY_HINT overrides it in seconds; 0 disables the hint, which users
-// who record their screen may prefer.
+// readyHintDuration 返回启动提示的停留时长；KEYVIVI_READY_HINT（秒）可覆盖，0 为关闭。
 func readyHintDuration() time.Duration {
 	const fallback = 1500 * time.Millisecond
 	raw := os.Getenv("KEYVIVI_READY_HINT")
@@ -47,8 +43,7 @@ func readyHintDuration() time.Duration {
 	return time.Duration(seconds * float64(time.Second))
 }
 
-// Logical overlay size. The window is fixed-size and Fyne sizes a fixed window
-// to its content, so the content must declare this or the overlay collapses.
+// 字幕的逻辑尺寸。固定尺寸窗口会收缩到内容最小尺寸，所以内容必须显式声明。
 const (
 	overlayWidth  = 1100
 	overlayHeight = 64
@@ -63,18 +58,13 @@ func Run() {
 	text.TextSize = 18
 	text.Alignment = fyne.TextAlignCenter
 	bg := canvas.NewRectangle(color.RGBA{15, 19, 28, 255})
-	// A fixed-size window is sized to its content's minimum, so an empty label
-	// collapses it to a thumbnail and the centring maths then places that
-	// thumbnail against the right edge. The background carries the real size.
+	// 空文本会让固定尺寸窗口塌成缩略图，居中后贴到屏幕右侧，故由背景撑开尺寸。
 	bg.SetMinSize(fyne.NewSize(overlayWidth, overlayHeight))
 	w.SetContent(container.NewStack(bg, container.NewCenter(text)))
 	w.Resize(fyne.NewSize(overlayWidth, overlayHeight))
 	w.SetCloseIntercept(a.Quit)
 	controller := display.NewController()
-	// The overlay flashes a ready hint so "running but no input yet" is
-	// distinguishable from "not running at all". A restricted token is reported
-	// here rather than in a dialog: it explains why keystrokes only appear while
-	// this window has focus, without interrupting every launch.
+	// 启动提示用于区分"在运行"与"没启动"；受限令牌只写进提示文字，不弹窗打扰。
 	readyHint := "KeyVivi 已启动"
 	if restricted, level, err := platform.RestrictedIntegrity(); err != nil {
 		debugf("integrity check failed: %v", err)
@@ -83,8 +73,7 @@ func Run() {
 		if restricted {
 			readyHint = fmt.Sprintf("KeyVivi 已启动（受限环境 %#x，仅本窗口有效）", level)
 		}
-		// The title carries the level in debug mode: the overlay drops its
-		// caption, so this is what an external probe can read back.
+		// 调试模式下把完整性级别写进标题，便于从外部确认启动方式。
 		if os.Getenv("KEYVIVI_DEBUG") != "" {
 			w.SetTitle(fmt.Sprintf("KeyVivi %#x", level))
 		}
@@ -92,10 +81,8 @@ func Run() {
 	readyUntil := time.Time{}
 	var hwnd uintptr
 	visible := false
-	// placeOverlay asks Fyne to put the window at the bottom centre of its
-	// monitor. It must go through Fyne's RequestPosition: Fyne stores whatever
-	// coordinates it is given and restores them on every Show, so a raw
-	// SetWindowPos placement is reverted the next time the overlay appears.
+	// 通过 Fyne 把窗口放到显示器底部居中。必须走 RequestPosition：Fyne 会保存
+	// 给定坐标并在每次 Show 时恢复，直接 SetWindowPos 会被撤销。
 	placeOverlay := func() {
 		if hwnd == 0 {
 			return
@@ -130,12 +117,10 @@ func Run() {
 		}
 		wantVisible := len(entries) > 0 || time.Now().Before(readyUntil)
 		if hwnd != 0 && visible != wantVisible {
-			// Fyne/GLFW must own visibility: a window shown via SetWindowPos is
-			// re-hidden by the driver. GLFW shows without activating.
+			// 可见性归 Fyne/GLFW，用 SetWindowPos 显示的窗口会被驱动重新隐藏。
 			if wantVisible {
 				w.Show()
-				// Fyne restores its own stored coordinates on every Show, so the
-				// placement must be re-requested through Fyne after each one.
+				// Fyne 每次 Show 都会恢复自己保存的坐标，显示后需重新请求定位。
 				placeOverlay()
 			} else {
 				w.Hide()
@@ -144,8 +129,7 @@ func Run() {
 			debugf("visibility -> %v (queue=%d)", wantVisible, len(entries))
 		}
 	}
-	// Every notice offers a quit path: the tray may be unavailable, and it is
-	// otherwise the only way to stop the program.
+	// 提示窗口一律带退出入口：托盘不可用时它是唯一的退出方式。
 	showNotice := func(title, message string) {
 		notice := a.NewWindow(title)
 		quit := widget.NewButton("退出 KeyVivi", a.Quit)
@@ -173,9 +157,7 @@ func Run() {
 	} else {
 		defer stopHook()
 	}
-	// KEYVIVI_SELFTEST=1 proves the hook chain end to end: same-process key
-	// injection reaches the hook even when other input never arrives. The
-	// result is shown on screen, so a field report needs no terminal.
+	// KEYVIVI_SELFTEST=1：注入 F24 验证钩子链路，结论显示在屏幕上，无需终端。
 	if os.Getenv("KEYVIVI_SELFTEST") != "" {
 		go func() {
 			time.Sleep(700 * time.Millisecond)
@@ -193,10 +175,8 @@ func Run() {
 			fyne.Do(func() { showNotice("钩子自检", message) })
 		}()
 	}
-	// KEYVIVI_DEMO=1 injects A, B, C once the startup hint has expired. It
-	// exercises the whole path from hook callback to rendered queue without a
-	// keyboard, which is how the display chain is verified here. It types into
-	// whatever window has focus, so it stays strictly manual.
+	// KEYVIVI_DEMO=1：启动提示结束后注入 A、B、C，验证从钩子到队列的完整链路。
+	// 会向当前焦点窗口真实输入这三个字母，仅手动排查时使用。
 	if os.Getenv("KEYVIVI_DEMO") != "" {
 		go func() {
 			time.Sleep(readyHintDuration() + 1200*time.Millisecond)
@@ -213,9 +193,7 @@ func Run() {
 	} else {
 		defer stopHotkey()
 	}
-	// Tray initialisation is asynchronous and unreported. Keep the fallback quit
-	// hotkey so a missing tray never leaves the program unstoppable, but report
-	// it on stderr instead of interrupting with a dialog.
+	// 托盘初始化异步且无返回值；失败时静默注册 Ctrl+Alt+Q 兜底退出并写日志。
 	go func() {
 		time.Sleep(2 * time.Second)
 		failed, detail := tray.Failed()
@@ -246,7 +224,7 @@ func Run() {
 			}
 		}
 	}()
-	// Create the native surface, then hand visibility to Fyne.
+	// 先创建原生窗口，之后可见性交给 Fyne。
 	w.Show()
 	go func() {
 		fyne.Do(func() {

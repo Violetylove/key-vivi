@@ -22,27 +22,23 @@ var peekMessage = user32.NewProc("PeekMessageW")
 var postThreadMessage = user32.NewProc("PostThreadMessageW")
 var keybdEvent = user32.NewProc("keybd_event")
 
-// hookEvents counts callback invocations for KEYVIVI_DEBUG diagnostics.
+// hookEvents 是供 KEYVIVI_DEBUG 计数的回调次数。
 var hookEvents atomic.Uint64
 
-// HookEventCount reports how many keyboard events the hook callback has seen.
-// It exposes a total only, never which keys were pressed.
+// HookEventCount 返回钩子回调见过的事件总数；只给数量，不给按了哪些键。
 func HookEventCount() uint64 { return hookEvents.Load() }
 
-// SendKey injects one press/release pair for a virtual key code. Diagnostic use
-// only: injection from this same process still reaches the hook when the desktop
-// delivers no other input.
+// SendKey 注入一次按键的按下与抬起。仅用于诊断：同进程注入在桌面不投递任何
+// 输入时仍能到达钩子。
 func SendKey(vk uint32) {
 	keybdEvent.Call(uintptr(vk), 0, 0, 0)
 	keybdEvent.Call(uintptr(vk), 0, 2, 0)
 }
 
-// SendTestKey injects F24. It has no display name, so the startup self-check
-// never shows up as a keystroke.
+// SendTestKey 注入 F24；它没有显示名，自检不会表现为一次按键。
 func SendTestKey() { SendKey(0x87) }
 
-// traceHook reports hook lifecycle detail when KEYVIVI_DEBUG is set. It records
-// handles and message-loop outcomes, never which keys were pressed.
+// traceHook 在 KEYVIVI_DEBUG 设置时输出钩子生命周期；只记句柄与消息循环结果。
 func traceHook(format string, args ...any) {
 	if os.Getenv("KEYVIVI_DEBUG") == "" {
 		return
@@ -63,7 +59,7 @@ type winMessage struct {
 	private        uint32
 }
 
-// Low-level hooks run on the installing thread and require its message pump.
+// 低级钩子在安装它的线程上执行，需要该线程自己跑消息循环。
 func StartKeyboardHook(events chan<- keyboard.Event) (func(), error) {
 	type result struct {
 		thread uint32

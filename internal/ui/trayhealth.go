@@ -7,21 +7,17 @@ import (
 	"sync"
 )
 
-// trayHealth reports whether the system tray initialised.
+// trayHealth 记录系统托盘是否初始化成功。
 //
-// Fyne's tray API returns no error when initialisation fails: the failure only
-// reaches the standard logger. A missing tray is then completely silent, and
-// because the tray is also the only quit entry point, the user is left with no
-// window, no icon and no way to exit. Watchers capture the logger so the app can
-// tell the user and offer a fallback.
+// Fyne 的托盘 API 失败时不返回错误，只写标准日志；托盘又是唯一的退出入口，
+// 缺失时用户既没有窗口也没有图标、无法退出。这里截获日志，以便提示并给出兜底退出。
 type trayHealth struct {
 	mu     sync.Mutex
 	failed bool
 	detail string
 }
 
-// watchTray tees the standard logger so tray failures can be detected. Output is
-// forwarded unchanged, so normal logging is unaffected.
+// watchTray 复制标准日志输出以捕获托盘失败；内容原样转发，不影响正常日志。
 func watchTray() *trayHealth {
 	health := &trayHealth{}
 	log.SetOutput(io.MultiWriter(log.Writer(), health))
@@ -38,7 +34,7 @@ func (h *trayHealth) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// Failed reports whether a tray error was logged, with the first detail line.
+// Failed 返回是否记录过托盘错误，以及第一行详情。
 func (h *trayHealth) Failed() (bool, string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

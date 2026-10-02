@@ -14,7 +14,7 @@ var registerHotKey = user32.NewProc("RegisterHotKey")
 var unregisterHotKey = user32.NewProc("UnregisterHotKey")
 var msgWaitForMultipleObjects = user32.NewProc("MsgWaitForMultipleObjects")
 
-// Hotkey modifier flags for StartHotkey.
+// StartHotkey 的修饰键标志。
 const (
 	ModAlt      = 0x0001
 	ModControl  = 0x0002
@@ -23,10 +23,8 @@ const (
 	ModNoRepeat = 0x4000
 )
 
-// StartHotkey registers a global hotkey combination. Callbacks run serially on a
-// background goroutine; marshal UI work with fyne.Do. stop is idempotent,
-// releases the registration, and may be called from the callback. A callback
-// already in progress can finish after stop returns.
+// StartHotkey 注册全局快捷键。回调在后台协程串行执行，UI 操作请用 fyne.Do 转交。
+// stop 可重复调用，会释放注册，也可在回调里调用；已在执行的回调可能在 stop 返回后才结束。
 func StartHotkey(modifiers, key uint32, callback func()) (stop func(), err error) {
 	if callback == nil {
 		return nil, fmt.Errorf("hotkey callback must not be nil")
@@ -57,7 +55,7 @@ func StartHotkey(modifiers, key uint32, callback func()) (stop func(), err error
 		}()
 		ready <- nil
 		for {
-			// Waiting on an event avoids a stop request being lost to a full message queue.
+			// 等待事件对象，避免停止请求因消息队列已满而丢失。
 			ret, _, err := msgWaitForMultipleObjects.Call(1, uintptr(unsafe.Pointer(&event)), 0, 0xffffffff, 0x04ff)
 			runtime.KeepAlive(event)
 			if ret == 0 {
@@ -119,7 +117,7 @@ func StartHotkey(modifiers, key uint32, callback func()) (stop func(), err error
 	}, nil
 }
 
-// StartPauseHotkey registers the Ctrl+Alt+K pause toggle.
+// StartPauseHotkey 注册 Ctrl+Alt+K 暂停/继续。
 func StartPauseHotkey(callback func()) (stop func(), err error) {
 	return StartHotkey(ModControl|ModAlt|ModNoRepeat, 'K', callback)
 }

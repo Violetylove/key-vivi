@@ -10,8 +10,8 @@ import (
 	"fyne.io/fyne/v2"
 )
 
-// Tray icons are drawn at runtime so the binary ships no image assets. Each
-// glyph is a 5x7 bitmap scaled up, which keeps "KV" legible at 16px.
+// 托盘图标在运行时绘制，二进制不携带图片资源。字形是 5x7 位图放大，
+// 保证 16px 下"KV"仍可辨认。
 var kvGlyphs = map[rune][7]string{
 	'K': {"10001", "10010", "10100", "11000", "10100", "10010", "10001"},
 	'V': {"10001", "10001", "10001", "10001", "10001", "01010", "00100"},
@@ -36,7 +36,7 @@ var (
 	iconBuildEr error
 )
 
-// insideRounded reports whether (x, y) lies inside a rounded square.
+// insideRounded 判断 (x, y) 是否落在圆角方块内。
 func insideRounded(x, y, w, h, radius int) bool {
 	if x < 0 || y < 0 || x >= w || y >= h {
 		return false
@@ -88,7 +88,7 @@ func drawTrayIcon(background color.RGBA) *image.RGBA {
 	return icon
 }
 
-// trayIcon returns the cached "KV" icon, greying it out while paused.
+// trayIcon 返回缓存的"KV"图标，暂停时变灰。
 func trayIcon(paused bool) fyne.Resource {
 	iconOnce.Do(func() {
 		for i, background := range []color.RGBA{activeIcon, pausedIcon} {

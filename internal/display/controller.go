@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Controller is owned by the Fyne runtime; no worker directly mutates its state.
+// Controller 由 Fyne 运行时单线程持有；工作协程不直接改其状态。
 type Controller struct {
 	Queue   Queue
 	Paused  bool
@@ -21,7 +21,7 @@ func (c *Controller) TogglePause() {
 	c.Paused = !c.Paused
 	c.Queue.Clear()
 	c.state = keyboard.NewState()
-	// Keys held across a pause transition must be released before reuse.
+	// 跨暂停仍按住的键必须先释放才能再次使用。
 	for vk := range c.held {
 		c.blocked[vk] = true
 	}
@@ -32,7 +32,7 @@ func (c *Controller) Handle(e keyboard.Event, now time.Time) {
 	} else {
 		delete(c.held, e.VKCode)
 	}
-	// The registered control shortcut must never enter the display queue.
+	// 已注册的控制快捷键绝不能进入显示队列。
 	ctrl, alt := false, false
 	for vk := range c.held {
 		switch keyboard.ModifierName(vk) {
@@ -60,7 +60,7 @@ func (c *Controller) Handle(e keyboard.Event, now time.Time) {
 		}
 		return
 	}
-	// After pause/reset, do not invent modifier presses for still-held keys.
+	// 暂停或重置后，不为仍按住的键补造修饰键。
 	if text := c.state.Handle(e, now); text != "" {
 		c.Queue.Push(text, now)
 	}

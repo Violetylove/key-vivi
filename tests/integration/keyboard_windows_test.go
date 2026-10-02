@@ -19,7 +19,7 @@ func TestLiveKeyboardHook(t *testing.T) {
 	}
 	defer stop()
 	send := windows.NewLazyDLL("user32.dll").NewProc("keybd_event")
-	// This opt-in desktop test injects F24 press/release events.
+	// 该测试仅在显式启用时运行，会注入 F24 的按下与抬起。
 	send.Call(0x87, 0, 0, 0)
 	send.Call(0x87, 0, 2, 0)
 	timeout := time.NewTimer(2 * time.Second)
@@ -41,9 +41,8 @@ func TestLiveKeyboardHook(t *testing.T) {
 	}
 }
 
-// TestHookSelfCheck covers the exported self-check path the app uses, including
-// the callback counter, so a passing TestLiveKeyboardHook cannot hide a counter
-// that never advances.
+// TestHookSelfCheck 覆盖应用使用的导出自检路径与回调计数，避免
+// TestLiveKeyboardHook 通过、而计数器始终不涨的情况被漏掉。
 func TestHookSelfCheck(t *testing.T) {
 	events := make(chan keyboard.Event, 64)
 	stop, err := platform.StartKeyboardHook(events)

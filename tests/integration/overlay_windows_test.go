@@ -44,10 +44,10 @@ func TestNativeOverlayStylesAndPosition(t *testing.T) {
 	}
 	defer u.NewProc("DestroyWindow").Call(hwnd)
 	foreground, _, _ := u.NewProc("GetForegroundWindow").Call()
-	// Show first, as Fyne does: Windows does not retain WS_EX_TOPMOST for a
-	// hidden window, so configuring a never-shown window would not match the app.
-	// ShowWindow returns the previous visibility state, not a success flag.
-	u.NewProc("ShowWindow").Call(hwnd, 4) // SW_SHOWNOACTIVATE
+	// 先显示再配置，与 Fyne 一致：隐藏窗口不保留 WS_EX_TOPMOST，
+	// 对从未显示的窗口做配置不能代表真实情况。
+	// ShowWindow 返回的是之前的可见状态，不是成功标志。
+	u.NewProc("ShowWindow").Call(hwnd, 4) // SW_SHOWNOACTIVATE：显示但不激活
 	if err := platform.ConfigureOverlay(hwnd); err != nil {
 		t.Fatal(err)
 	}
@@ -57,16 +57,14 @@ func TestNativeOverlayStylesAndPosition(t *testing.T) {
 	if style&(0x00c00000|0x00040000) != 0 {
 		t.Fatalf("decorations remain: %#x", style)
 	}
-	// Styles applied through SetWindowLongW are deterministic. WS_EX_TOPMOST is
-	// requested through SetWindowPos and a synthetic popup does not retain it,
-	// so it is reported rather than asserted; the real Fyne window was observed
-	// with WS_EX_TOPMOST set (extended style 0x8000b8).
+	// SetWindowLongW 设置的样式是确定的。WS_EX_TOPMOST 由 SetWindowPos 请求，
+	// 合成弹窗不保留它，因此只记录不断言；真实 Fyne 窗口实测带该位（0x8000b8）。
 	required := uintptr(0x80 | 0x08000000 | 0x20)
 	if exStyle&required != required || exStyle&0x00040000 != 0 {
 		t.Fatalf("incorrect overlay extended style: %#x", exStyle)
 	}
-	// Regression guard: WS_EX_LAYERED stops GLFW's OpenGL swap from being
-	// composited, so the window reports itself visible while painting nothing.
+	// 回归保护：WS_EX_LAYERED 会让 GLFW 的 OpenGL 交换不被合成，
+	// 窗口自报可见却一个像素都不画。
 	if exStyle&0x00080000 != 0 {
 		t.Fatalf("WS_EX_LAYERED must stay clear or the overlay paints nothing: %#x", exStyle)
 	}
@@ -94,9 +92,8 @@ func TestNativeOverlayStylesAndPosition(t *testing.T) {
 		t.Skip("GetDpiForWindow unavailable; overlay position depends on display DPI")
 	}
 	margin := int32(80 * float64(dpi) / 96)
-	// ConfigureOverlay must not move the window: Fyne owns position and restores
-	// its own stored coordinates on every Show, so placement has to go through
-	// desktop.Window.RequestPosition using OverlayPosition's result.
+	// ConfigureOverlay 不得移动窗口：位置归 Fyne，它每次 Show 都会恢复自己保存的
+	// 坐标，定位必须用 OverlayPosition 的结果走 desktop.Window.RequestPosition。
 	if bounds.left != 0 || bounds.top != 0 {
 		t.Fatalf("ConfigureOverlay moved the window: bounds=%+v", bounds)
 	}
@@ -110,7 +107,7 @@ func TestNativeOverlayStylesAndPosition(t *testing.T) {
 	if x != wantX || y != wantY {
 		t.Fatalf("OverlayPosition = %d,%d want %d,%d (work=%+v size=%dx%d dpi=%d)", x, y, wantX, wantY, work, width, height, dpi)
 	}
-	// ConfigureOverlay must neither hide the window nor take focus: Fyne/GLFW own visibility.
+	// ConfigureOverlay 既不能隐藏窗口也不能抢焦点：可见性归 Fyne/GLFW。
 	if shown, _, _ := u.NewProc("IsWindowVisible").Call(hwnd); shown == 0 {
 		t.Fatal("ConfigureOverlay hid a visible window")
 	}

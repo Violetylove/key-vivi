@@ -6,8 +6,7 @@ import (
 	"testing"
 )
 
-// This test lives beside the code because the icon builders are unexported;
-// tests/unit covers behaviour reached through exported APIs.
+// 图标构造函数未导出，故测试与代码同包；tests/unit 只覆盖导出 API。
 func TestTrayIconIsAValidPNG(t *testing.T) {
 	for _, paused := range []bool{false, true} {
 		resource := trayIcon(paused)
