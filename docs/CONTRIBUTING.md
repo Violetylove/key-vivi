@@ -1,54 +1,31 @@
-# 编码与提交规范
+# 贡献规范
 
-## 注释
+## 文档与目录
 
-代码注释一律使用中文，且必须精炼。
+文档职责见[协作规则](../AGENTS.md#文档职责)。修改需求或实现时同步对应文档，避免重复维护。
 
-- 只写"为什么这样做"和"约束是什么"，不复述代码在做什么。
-- 单行能说清就写单行；禁止把实现逐句翻译成注释。
-- 导出标识符使用文档注释，首句给出结论，补充说明另起一段。
-- 踩过的坑要留下"现象 + 原因"，例如："分层窗口必须提交预乘 BGRA，否则半透明边缘会出现色晕"。
-- 日志字符串保持英文，便于 grep 与对照文档；注释中文化不影响日志。
+| 路径 | 用途 |
+|---|---|
+| `cmd/keyvivi` | 程序入口 |
+| `internal/{app,keyboard,display,render,platform}` | 实现代码 |
+| `tests/unit`、`tests/integration` | 单元和原生集成测试 |
+| `tests/artifacts` | 本地验证证据，Git 忽略 |
+| `docs` | 项目文档 |
+| `dist` | 构建产物，Git 忽略 |
 
-```go
-// 正确：说明约束
-// 窗口和 GDI 资源有线程亲和性，须在创建它们的 UI 线程释放。
+未导出实现允许使用同包 `*_test.go`，文件头说明原因。根目录不放源码、测试或 exe。
 
-// 错误：复述代码
-// 调用 Show 方法显示窗口。
-```
+## 编码
 
-## 提交信息
+- 修改前读取文件，保留无关改动。
+- 注释使用中文，只解释原因和约束；导出标识符首句给出结论。
+- 踩坑注释记录现象与已确认原因。
+- 日志使用英文，不记录键码、组合名称或字幕内容。
+- 输入、线程、窗口与清理约束见[设计文档](architecture.md)。
 
-标题与正文全部使用英文，遵循 Conventional Commits：
+## 构建与测试
 
-```text
-<type>(<optional scope>): <description>
-```
-
-描述用祈使句、简洁。常用类型：feat、fix、refactor、test、docs、build、ci、chore、perf、revert。破坏性变更用 `!` 或 `BREAKING CHANGE` 脚注。
-
-示例：
-
-```text
-chore: initialize KeyVivi repository
-feat(display): add FIFO keystroke queue
-fix(keyboard): preserve held modifier state
-test(platform): verify hotkey cleanup
-```
-
-## 提交节奏
-
-**不要一改动就提交。**
-
-- 每天收工，或一个模块／功能完成时提交一次。
-- 粒度按模块或功能，宁可少而完整。
-- 同一模块的连续修补合并成一个提交，不要留下"再修一下"的碎片提交。
-- 需要重写历史时先打备份分支，重写后用 `git diff` 确认内容零差异。
-
-## 提交前检查
-
-必须在仓库根目录通过以下命令，并检查 `git diff --cached`：
+在 Windows 仓库根目录执行，Go 版本以 [go.mod](../go.mod) 为准：
 
 ```powershell
 gofmt -w .
@@ -57,18 +34,26 @@ go test -race ./...
 .\build.ps1
 ```
 
-构建流程关闭CGO、生成exe，并只修正该产物的文件完整性标签，防止继承工作区Low标签导致双击后降权；不修改工作区目录。日常启动直接双击exe。
+普通构建关闭 CGO，用户运行无需 Go 或 C 编译器；Windows 竞态检查需要启用 CGO 和可用的 C 编译器。构建脚本只将产物 exe 标为 Medium，不更改工作区安全设置。构建后直接运行 `dist\KeyVivi.exe`。
 
-集成测试需要交互式桌面，会注入键盘事件，显式运行：
+原生集成测试需要交互式桌面，会创建窗口、注册热键并注入 F24：
 
-```bash
-go test -race -tags integration ./internal/app ./tests/integration
+```powershell
+go test -race -tags integration ./internal/app ./tests/integration -count=1 -v -timeout=90s
 ```
 
-不要提交产物（`dist/`）、测试截图或证据（`tests/artifacts/`）、密钥，或与本次改动无关的内容。不要伪造作者身份，未经同意不要重写历史。
+可选验证通过环境变量显式启用：
 
-## 目录布局
+| 环境变量 | 验证命令 |
+|---|---|
+| `KEYVIVI_SETTINGS_PREVIEW=1` | `go test -race -tags integration ./internal/app -run 'TestNativeSettingsDraftSaveCancelDefaultsAndDPI' -count=1` |
+| `KEYVIVI_ANIMATION_PREVIEW=1` | `go test ./internal/app -run 'Preview$' -count=1` |
+| `KEYVIVI_MEASURE_CADENCE=1` | `go test -tags integration ./tests/integration -run '^TestLoopCadence$' -count=1 -v -timeout=15s` |
 
-程序入口放 `cmd/keyvivi`，实现在 `internal` 各模块，测试放 `tests/unit` 或 `tests/integration`，文档在 `docs`，产物在 `dist`，本地测试证据在 `tests/artifacts`。被测代码未导出时，允许在同包内放 `*_test.go`，并在文件头说明原因。
+预览写入 `tests/artifacts`。帧间隔测量不包含渲染与桌面合成；正式验收要求见[项目规格](project_spec.md#验收条件)。
 
-构建成功不能作为功能完成的证据；桌面行为必须在真实桌面验证。
+## 提交
+
+提交信息使用英文 Conventional Commits，例如 `fix(settings): preserve draft after saving`。功能完成或收工时统一提交，同一功能的连续修补不拆碎。
+
+提交前检查 `git diff --cached`，不包含产物、证据、密钥或无关改动。未经授权不重写历史、不伪造作者身份。
