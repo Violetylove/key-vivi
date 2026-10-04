@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,8 +26,8 @@ type config struct {
 }
 type regionConfig struct {
 	Position string `yaml:"position"`
-	OffsetX  int    `yaml:"offset_x_px"`
-	OffsetY  int    `yaml:"offset_y_px"`
+	MarginX  int    `yaml:"margin_x_px"`
+	MarginY  int    `yaml:"margin_y_px"`
 	Width    int    `yaml:"max_width_px"`
 }
 type appearanceConfig struct {
@@ -40,7 +41,6 @@ type appearanceConfig struct {
 }
 type behaviorConfig struct {
 	MaxGroups   int  `yaml:"max_groups"`
-	MaxElements int  `yaml:"max_elements"`
 	GroupPause  int  `yaml:"group_pause_ms"`
 	Hold        int  `yaml:"hold_ms"`
 	Animation   bool `yaml:"animation"`
@@ -64,9 +64,24 @@ func positionAnchor(position string) int {
 
 func defaultConfig() config {
 	return config{Version: 1,
-		Region:     regionConfig{"bottom_left", 24, -24, 420},
+		Region:     regionConfig{Position: "bottom_left", MarginX: 24, MarginY: 24, Width: 420},
 		Appearance: appearanceConfig{18, "#FFFFFF", "#14181F", 88, 8, 16, "mocha"},
-		Behavior:   behaviorConfig{3, 8, 700, 1500, true, false}}
+		Behavior:   behaviorConfig{3, 700, 1500, true, false}}
+}
+
+// regionOffsets 将向内边距换算为几何层偏移；居中不读取水平边距。
+func (c config) regionOffsets(scale float64) (int, int) {
+	x, y := int(math.Round(float64(c.Region.MarginX)*scale)), int(math.Round(float64(c.Region.MarginY)*scale))
+	anchor := positionAnchor(c.Region.Position)
+	if anchor%3 == 1 {
+		x = 0
+	} else if anchor%3 == 2 {
+		x = -x
+	}
+	if anchor >= 6 {
+		y = -y
+	}
+	return x, y
 }
 
 func (c config) validate() error {
@@ -87,11 +102,11 @@ func (c config) validate() error {
 		name             string
 		value, low, high int
 	}{
-		{"水平偏移", c.Region.OffsetX, -10000, 10000}, {"垂直偏移", c.Region.OffsetY, -10000, 10000},
+		{"水平边距", c.Region.MarginX, 0, 10000}, {"垂直边距", c.Region.MarginY, 0, 10000},
 		{"最大行宽", c.Region.Width, 160, 1200}, {"字号", c.Appearance.FontSize, 12, 48},
 		{"背景透明度", c.Appearance.BackgroundOpacity, 0, 100}, {"元素间距", c.Appearance.ElementGap, 0, 40},
-		{"行间距", c.Appearance.RowGap, 0, 40}, {"最多组数", c.Behavior.MaxGroups, 1, 6},
-		{"每组元素数", c.Behavior.MaxElements, 2, 20}, {"分组停顿", c.Behavior.GroupPause, 100, 5000},
+		{"行间距", c.Appearance.RowGap, 0, 40}, {"最多行数", c.Behavior.MaxGroups, 1, 6},
+		{"换行停顿", c.Behavior.GroupPause, 100, 5000},
 		{"停留时间", c.Behavior.Hold, 200, 10000},
 	} {
 		if value.value < value.low || value.value > value.high {
@@ -128,7 +143,7 @@ func (c config) theme() render.Theme {
 }
 
 func (c config) displayOptions() *display.Options {
-	return &display.Options{MaxGroups: c.Behavior.MaxGroups, MaxElements: c.Behavior.MaxElements,
+	return &display.Options{MaxGroups: c.Behavior.MaxGroups,
 		GroupPause: time.Duration(c.Behavior.GroupPause) * time.Millisecond, Hold: time.Duration(c.Behavior.Hold) * time.Millisecond,
 		Animation: c.Behavior.Animation}
 }
@@ -216,17 +231,17 @@ var configComments = map[string]string{
 	"version":        "配置版本；尺寸为逻辑像素，时间为毫秒。",
 	"region":         "显示区域：位置以主显示器工作区为基准。",
 	"position":       "顶部或底部：top_left / top_center / top_right / bottom_left / bottom_center / bottom_right。",
-	"offset_x_px":    "水平偏移：正数向右，负数向左。",
-	"offset_y_px":    "垂直偏移：正数向下，负数向上。",
+	"margin_x_px":    "距屏幕左右边缘：0–10000；上中、下中忽略，切换位置保留此值。",
+	"margin_y_px":    "距屏幕上或下边缘：0–10000；始终向内留白。",
 	"max_width_px":   "最大行宽：160–1200。",
 	"appearance":     "外观与布局。",
 	"settings_theme": "设置窗口配色：mocha（深色）或 latte（浅色）。",
 	"font_size_px":   "字号：12–48。", "text_color": "文字颜色：加引号的 #RRGGBB。",
 	"background_color": "背景颜色：加引号的 #RRGGBB。", "background_opacity_percent": "背景不透明度：0–100；0为透明。",
 	"element_gap_px": "元素间距：0–40。", "row_gap_px": "行间距：0–40。",
-	"behavior": "行为与动画。", "max_groups": "最多组数：1–6，包含退场组。",
-	"max_elements": "每组元素数：2–20，组合键占一个。", "group_pause_ms": "分组停顿：100–5000；不参与组合键识别。",
-	"hold_ms": "完整停留：200–10000；从入场结束后计时。", "animation": "启用淡入、淡出和纵向移动。",
+	"behavior": "行为与动画。", "max_groups": "最多行数：1–6，包含退场行。",
+	"group_pause_ms": "换行停顿：100–5000；不参与组合键识别。",
+	"hold_ms":        "完整停留：200–10000；从入场结束后计时。", "animation": "启用淡入、淡出和纵向移动。",
 	"start_paused": "启动时暂停；不改变当前暂停状态。",
 }
 

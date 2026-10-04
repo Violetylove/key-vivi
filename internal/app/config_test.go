@@ -13,6 +13,7 @@ import (
 	"key-vivi/internal/display"
 	"key-vivi/internal/keyboard"
 	"key-vivi/internal/platform"
+	"key-vivi/internal/render"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -48,7 +49,7 @@ func TestConfigCreationCommentsReloadAndFailedReplacement(t *testing.T) {
 		t.Fatal("defaults lack comments or quoted colors")
 	}
 	data = append([]byte("# 我的设置，请保留\n"), data...)
-	data = []byte(strings.Replace(string(data), "offset_x_px: 24", "offset_x_px: 24 # 自定义说明", 1))
+	data = []byte(strings.Replace(string(data), "margin_x_px: 24", "margin_x_px: 24 # 自定义说明", 1))
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestConfigCreationCommentsReloadAndFailedReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Region.Position = "top_right"
-	c.Region.OffsetX = -36
+	c.Region.MarginX = 36
 	c.Behavior.Animation = false
 	if err := s.save(c); err != nil {
 		t.Fatal(err)
@@ -84,6 +85,60 @@ func TestConfigCreationCommentsReloadAndFailedReplacement(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".keyvivi-*.tmp"))
 	if len(files) != 0 {
 		t.Fatal("temporary file leaked")
+	}
+}
+
+func TestConfigMarginRange(t *testing.T) {
+	for _, raw := range []string{
+		"region:\n  margin_x_px: -1\n",
+		"region:\n  margin_y_px: -1\n",
+		"region:\n  margin_x_px: 10001\n",
+		"region:\n  margin_y_px: 10001\n",
+	} {
+		if _, _, err := parseConfig([]byte(raw)); err == nil {
+			t.Fatalf("out-of-range margin accepted: %q", raw)
+		}
+	}
+}
+
+func TestMeasuredRowWidthReplacesElementLimit(t *testing.T) {
+	for _, scale := range []float64{1, 1.25, 1.5, 2} {
+		c := defaultConfig()
+		c.Region.Width = 1200
+		q := display.Queue{Options: c.displayOptions()}
+		q.Fits = func(items []string) bool {
+			plan, err := render.Layout(items, c.theme(), scale, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return float64(plan.Width) <= float64(c.Region.Width)*scale
+		}
+		now := time.Unix(100, 0)
+		for i := 0; i < 12; i++ {
+			q.Push(string(rune('A'+i)), now.Add(time.Duration(i)*time.Millisecond), 1)
+		}
+		prefix := q.Entries()
+		if len(prefix) != 12 || prefix[0].GroupID != prefix[11].GroupID {
+			t.Fatal("element count caused a row break", scale, prefix)
+		}
+		wrapped := false
+		for i := 12; i < 32; i++ {
+			q.Push("Ctrl+Shift+Backspace", now.Add(time.Duration(i)*time.Millisecond), 1)
+			entries := q.Entries()
+			if entries[len(entries)-1].GroupID != prefix[0].GroupID {
+				// 同行追加会续期，只比较输入身份与内容。
+				for j, want := range prefix {
+					if entries[j].ID != want.ID || entries[j].Text != want.Text || entries[j].GroupID != want.GroupID {
+						t.Fatal("width wrap discarded the row prefix", scale)
+					}
+				}
+				wrapped = true
+				break
+			}
+		}
+		if !wrapped {
+			t.Fatal("measured row width did not trigger wrapping", scale)
+		}
 	}
 }
 
@@ -118,12 +173,12 @@ func TestInvalidConfigPreservedAndUnwritablePathUsesDefaults(t *testing.T) {
 
 func TestSettingsFieldsRoundTripAndConfiguredRuntime(t *testing.T) {
 	c := defaultConfig()
-	c.Region = regionConfig{"bottom_right", -40, 30, 600}
+	c.Region = regionConfig{Position: "bottom_right", MarginX: 40, MarginY: 30, Width: 600}
 	c.Appearance = appearanceConfig{24, "#11AAFF", "#332211", 60, 4, 10, "latte"}
-	c.Behavior = behaviorConfig{2, 2, 300, 800, false, true}
+	c.Behavior = behaviorConfig{2, 300, 800, false, true}
 	values := configValues(c)
 	got, err := configFromValues(values)
-	if err != nil || got != c || len(values) != 17 {
+	if err != nil || got != c || len(values) != 16 {
 		t.Fatal(got, err)
 	}
 	for key, bad := range map[string]string{"groups": "7", "hold": "NaN", "text": "#zzzzzz", "position": "9", "animation": "invalid", "settings_theme": "unknown"} {
@@ -141,6 +196,7 @@ func TestSettingsFieldsRoundTripAndConfiguredRuntime(t *testing.T) {
 		t.Fatal("saving config changed pause state")
 	}
 	s.toggle(now, nil)
+	s.controller.Queue.Fits = func(items []string) bool { return len(items) <= 2 }
 	for i, key := range []uint32{'A', 'B', 'C', 'D', 'E'} {
 		at := now.Add(time.Duration(i) * 10 * time.Millisecond)
 		s.input(keyboard.Event{VKCode: key, IsDown: true, When: at}, at)
@@ -175,6 +231,26 @@ func TestRegionAnchorsAndBitmapGrowthKeepBaseline(t *testing.T) {
 		want := []int{0, 1, 2, 6, 7, 8}[i]
 		if err != nil || got != c || positionAnchor(p) != want {
 			t.Fatal("position option or geometry mapping", p, got, err)
+		}
+		for _, scale := range []float64{1, 1.25, 1.5, 2} {
+			ox, oy := c.regionOffsets(scale)
+			margin := int(24 * scale)
+			x, y := platform.RegionPosition(0, 0, 1920, 1040, 420, 180, 180, want, ox, oy)
+			wantX := []int{margin, (1920 - 420) / 2, 1920 - 420 - margin}[i%3]
+			wantY := margin
+			if i >= 3 {
+				wantY = 1040 - 180 - margin
+			}
+			if x != wantX || y != wantY {
+				t.Fatal("screen margins do not follow position", p, scale, x, y)
+			}
+			if i%3 == 1 {
+				c.Region.MarginX = 1000
+				if centered, _ := c.regionOffsets(scale); centered != 0 {
+					t.Fatal("centered position reads horizontal margin", p)
+				}
+				c.Region.MarginX = 24
+			}
 		}
 	}
 	for _, p := range []string{"middle_left", "center", "middle_right"} {

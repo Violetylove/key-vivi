@@ -34,8 +34,8 @@ func TestFIFOQueue(t *testing.T) {
 	for _, text := range []string{"A", "B", "C", "D", "E", "F", "G", "Ctrl+Shift+S", "Enter"} {
 		q.Push(text, now, 1)
 	}
-	if got := q.Entries(); len(got) != 9 || got[7].GroupID != got[0].GroupID || got[8].GroupID == got[0].GroupID {
-		t.Fatal("ninth element must wrap without splitting or removing the first eight", got)
+	if got := q.Entries(); len(got) != 9 || got[8].GroupID != got[0].GroupID {
+		t.Fatal("element count must not wrap before the width limit", got)
 	}
 }
 func TestQueueRepeatRefresh(t *testing.T) {

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image"
 	"log"
-	"math"
 	"os"
 	"time"
 
@@ -317,8 +316,9 @@ func Run() error {
 			img = img.SubImage(image.Rect(0, img.Bounds().Dy()-workHeight, img.Bounds().Dx(), img.Bounds().Dy())).(*image.RGBA)
 		}
 		anchor := positionAnchor(activeConfig.Region.Position)
+		ox, oy := activeConfig.regionOffsets(workScale)
 		x, y := platform.RegionPosition(workLeft, workTop, workWidth, workHeight, img.Bounds().Dx(), img.Bounds().Dy(), regionPixels, anchor,
-			int(math.Round(float64(activeConfig.Region.OffsetX)*workScale)), int(math.Round(float64(activeConfig.Region.OffsetY)*workScale)))
+			ox, oy)
 		if err := overlay.Apply(img, x, y); err != nil {
 			loop.Fail(err)
 			return false

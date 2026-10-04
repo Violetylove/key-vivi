@@ -24,8 +24,8 @@ func configFields(c config) []platform.SettingField {
 	}
 	fields := []platform.SettingField{
 		{Key: "position", Label: "位置", Value: strconv.Itoa(position), Group: 0, Kind: "choice", Choices: []string{"左上", "上中", "右上", "左下", "下中", "右下"}},
-		{Key: "offset_x", Label: "水平偏移（px）", Value: strconv.Itoa(c.Region.OffsetX), Group: 0},
-		{Key: "offset_y", Label: "垂直偏移（px）", Value: strconv.Itoa(c.Region.OffsetY), Group: 0},
+		{Key: "margin_x", Label: "水平边距（px）", Value: strconv.Itoa(c.Region.MarginX), Group: 0},
+		{Key: "margin_y", Label: "垂直边距（px）", Value: strconv.Itoa(c.Region.MarginY), Group: 0},
 		{Key: "width", Label: "最大行宽（px）", Value: strconv.Itoa(c.Region.Width), Group: 0},
 		{Key: "font", Label: "字号（px）", Value: strconv.Itoa(c.Appearance.FontSize), Group: 1},
 		{Key: "text", Label: "文字颜色", Value: c.Appearance.TextColor, Group: 1, Kind: "color"},
@@ -33,9 +33,8 @@ func configFields(c config) []platform.SettingField {
 		{Key: "opacity", Label: "背景不透明度（%）", Value: strconv.Itoa(c.Appearance.BackgroundOpacity), Group: 1},
 		{Key: "element_gap", Label: "元素间距（px）", Value: strconv.Itoa(c.Appearance.ElementGap), Group: 1},
 		{Key: "row_gap", Label: "行间距（px）", Value: strconv.Itoa(c.Appearance.RowGap), Group: 1},
-		{Key: "groups", Label: "最多组数", Value: strconv.Itoa(c.Behavior.MaxGroups), Group: 2},
-		{Key: "elements", Label: "每组元素数", Value: strconv.Itoa(c.Behavior.MaxElements), Group: 2},
-		{Key: "pause", Label: "分组停顿（ms）", Value: strconv.Itoa(c.Behavior.GroupPause), Group: 2},
+		{Key: "groups", Label: "最多行数", Value: strconv.Itoa(c.Behavior.MaxGroups), Group: 2},
+		{Key: "pause", Label: "换行停顿（ms）", Value: strconv.Itoa(c.Behavior.GroupPause), Group: 2},
 		{Key: "hold", Label: "停留时间（ms）", Value: strconv.Itoa(c.Behavior.Hold), Group: 2},
 		{Key: "animation", Label: "启用动画", Value: strconv.FormatBool(c.Behavior.Animation), Group: 2, Kind: "bool"},
 		{Key: "start_paused", Label: "启动时暂停", Value: strconv.FormatBool(c.Behavior.StartPaused), Group: 2, Kind: "bool"},
@@ -44,20 +43,19 @@ func configFields(c config) []platform.SettingField {
 	descriptions := map[string]string{
 		"position":       "选择整块按键区域在主屏上的位置。",
 		"settings_theme": "Mocha 深色与 Latte 浅色，实时预览。",
-		"offset_x":       "正数向右，负数向左。",
-		"offset_y":       "正数向下，负数向上。",
-		"width":          "一行放不下时另起一组。",
+		"margin_x":       "距屏幕左右边缘；上中、下中忽略此值。",
+		"margin_y":       "距屏幕上或下边缘，始终向内留白。",
+		"width":          "一行放不下时自动换行。",
 		"font":           "按键文字大小，尺寸随屏幕缩放。",
 		"text":           "点击色块选择按键文字的颜色。",
 		"background":     "点击色块选择键帽底色。",
 		"opacity":        "0 为完全透明，100 为不透明。",
-		"element_gap":    "同一组内相邻键帽的间隔。",
-		"row_gap":        "上下两组之间的距离。",
-		"groups":         "同时保留的输入组数，范围 1–6。",
-		"elements":       "每组完整输入数量，范围 2–20。",
-		"pause":          "停顿达到此时间后，输入进入新组。",
-		"hold":           "最后一次输入后，整组保持可见的时间。",
-		"animation":      "控制淡入、淡出和组间移动。",
+		"element_gap":    "同一行内相邻键帽的间隔。",
+		"row_gap":        "上下两行之间的距离。",
+		"groups":         "同时保留的行数，范围 1–6。",
+		"pause":          "停顿达到此时间后，输入进入新行。",
+		"hold":           "最后一次输入后，整行保持可见的时间。",
+		"animation":      "控制淡入、淡出和行间移动。",
 		"start_paused":   "下次启动时生效，当前暂停状态不变。",
 	}
 	for i := range fields {
@@ -80,9 +78,9 @@ func configFromValues(values map[string]string) (config, error) {
 		key    string
 		target *int
 	}{
-		{"offset_x", &c.Region.OffsetX}, {"offset_y", &c.Region.OffsetY}, {"width", &c.Region.Width},
+		{"margin_x", &c.Region.MarginX}, {"margin_y", &c.Region.MarginY}, {"width", &c.Region.Width},
 		{"font", &c.Appearance.FontSize}, {"opacity", &c.Appearance.BackgroundOpacity}, {"element_gap", &c.Appearance.ElementGap}, {"row_gap", &c.Appearance.RowGap},
-		{"groups", &c.Behavior.MaxGroups}, {"elements", &c.Behavior.MaxElements}, {"pause", &c.Behavior.GroupPause}, {"hold", &c.Behavior.Hold},
+		{"groups", &c.Behavior.MaxGroups}, {"pause", &c.Behavior.GroupPause}, {"hold", &c.Behavior.Hold},
 	} {
 		n, err := strconv.Atoi(strings.TrimSpace(values[field.key]))
 		if err != nil {
@@ -139,7 +137,8 @@ func configPreview(c config, scale float64, width, height, workWidth, workHeight
 	}
 	anchor := positionAnchor(c.Region.Position)
 	w := min(workWidth, int(float64(c.Region.Width)*scale))
-	x, y := platform.RegionPosition(0, 0, workWidth, workHeight, w, min(rh, workHeight), rh, anchor, int(math.Round(float64(c.Region.OffsetX)*scale)), int(math.Round(float64(c.Region.OffsetY)*scale)))
+	ox, oy := c.regionOffsets(scale)
+	x, y := platform.RegionPosition(0, 0, workWidth, workHeight, w, min(rh, workHeight), rh, anchor, ox, oy)
 	box := image.Rect(desk.Min.X+int(float64(x)*factor), desk.Min.Y+int(float64(y)*factor), desk.Min.X+int(float64(x+w)*factor), desk.Min.Y+int(float64(y+min(rh, workHeight))*factor))
 	draw.Draw(img, box.Intersect(desk), image.NewUniform(accent), image.Point{}, draw.Src)
 	previewScale := scale * math.Min(1, float64(height-2*pad)/float64(rh))

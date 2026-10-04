@@ -4,14 +4,14 @@ import "time"
 
 // Options 在 UI 线程应用配置后保持不变；零指针沿用默认行为。
 type Options struct {
-	MaxGroups, MaxElements int
-	GroupPause, Hold       time.Duration
-	Animation              bool
+	MaxGroups        int
+	GroupPause, Hold time.Duration
+	Animation        bool
 }
 
 func (o *Options) values() Options {
 	if o == nil {
-		return Options{MaxGroups, MaxElements, GroupPause, Hold, true}
+		return Options{MaxGroups, GroupPause, Hold, true}
 	}
 	return *o
 }

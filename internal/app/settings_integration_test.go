@@ -147,12 +147,20 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 			return fmt.Errorf("position dropdown did not expand")
 		}
 		send.Call(item(100), 0x14f, 0, 0)
+		edit(101, "36")
+		edit(102, "48")
+		for i := range positions {
+			choose(100, i)
+			if read(101) != "36" || read(102) != "48" {
+				return fmt.Errorf("position switch changed margin values")
+			}
+		}
 		if read(104) != "24" {
 			return fmt.Errorf("active config not loaded into controls")
 		}
 		updateWindow.Call(settings.Handle())
 		edit(104, "30")
-		choose(116, 1)
+		choose(115, 1)
 		for _, id := range []int{105, 106} {
 			var class [32]uint16
 			dll.NewProc("GetClassNameW").Call(item(id), uintptr(unsafe.Pointer(&class[0])), uintptr(len(class)))
@@ -201,7 +209,7 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 		if err := checkSettingsScrollPaint(settings.Handle(), item, "mocha", t); err != nil {
 			return err
 		}
-		choose(116, 1)
+		choose(115, 1)
 		if active.Appearance.SettingsTheme != "mocha" {
 			return fmt.Errorf("theme preview changed active config")
 		}
@@ -213,7 +221,7 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 		}
 		edit(104, "32")
 		choose(100, 2)
-		click(114)
+		click(113)
 		store.replace = func(string, string) error { return errors.New("replacement denied") }
 		before, _ = os.ReadFile(store.path)
 		click(1)
@@ -241,16 +249,18 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 			return err
 		}
 		edit(104, "28")
+		edit(101, "36")
+		edit(102, "48")
 		choose(100, 5)
 		send.Call(settings.Handle(), 0x2e0, 144|(144<<16), 0)
-		if read(104) != "28" {
+		if read(104) != "28" || read(101) != "36" || read(102) != "48" {
 			return fmt.Errorf("DPI reflow lost draft")
 		}
 		if read(106) != "#112233" {
 			return fmt.Errorf("DPI reflow lost chosen color")
 		}
 		click(1)
-		if active.Region.Position != "bottom_right" || active.Behavior.Animation || active.Appearance.SettingsTheme != "latte" {
+		if active.Region.Position != "bottom_right" || active.Region.MarginX != 36 || active.Region.MarginY != 48 || active.Behavior.Animation || active.Appearance.SettingsTheme != "latte" {
 			return fmt.Errorf("DPI reflow lost position selection or toggle state")
 		}
 		if settings.Handle() == 0 {
@@ -262,7 +272,7 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 			if err := open(); err != nil {
 				return err
 			}
-			choose(116, cycle%2)
+			choose(115, cycle%2)
 			settings.Show()
 			settings.Destroy()
 			settings.Destroy()
@@ -294,7 +304,7 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 	}, func(time.Time) bool {
 		if phase == -5 {
 			focus, _, _ := dll.NewProc("GetFocus").Call()
-			if focus != fieldHandle(116) {
+			if focus != fieldHandle(115) {
 				if time.Since(started) > 15*time.Second {
 					ui.Fail(fmt.Errorf("Tab did not focus theme dropdown"))
 					return false

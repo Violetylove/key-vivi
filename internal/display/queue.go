@@ -23,11 +23,9 @@ const (
 	Move       = 120 * time.Millisecond
 	GroupPause = 700 * time.Millisecond
 	MaxGroups  = 3
-	// MaxElements 是默认每组容量，组合键只占一个元素。
-	MaxElements = 8
 )
 
-// Queue 保存输入组；停顿、元素达到上限或宽度不足时另起一组。
+// Queue 保存输入行；停顿或实测宽度不足时另起一行。
 type Queue struct {
 	// Options 为空时保留默认三组与计时规则。
 	Options                 *Options
@@ -75,8 +73,8 @@ func (q *Queue) Push(text string, now time.Time, count int) {
 		candidate = append(candidate, e.Text)
 	}
 	candidate = append(candidate, label)
-	// 元素数和实测宽度共同限流，长组合提前换行，不能挤掉当前行前缀。
-	full := len(candidate) > options.MaxElements || q.Fits != nil && !q.Fits(candidate)
+	// 换行依据实测宽度，不能挤掉当前行前缀。
+	full := q.Fits != nil && !q.Fits(candidate)
 	if start == len(q.entries) || full {
 		start, merge, label = len(q.entries), false, name
 		q.repeatOffset = count - 1
