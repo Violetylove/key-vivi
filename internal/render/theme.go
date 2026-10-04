@@ -31,12 +31,12 @@ func DefaultTheme() Theme {
 		CountColor:      color.RGBA{R: 219, G: 226, B: 238, A: 255},
 		CountBackground: color.RGBA{R: 255, G: 255, B: 255, A: 24},
 		FontSize:        18,
-		PaddingX:        14,
-		PaddingY:        10,
-		Radius:          8,
+		PaddingX:        8,
+		PaddingY:        6,
+		Radius:          6,
 		GroupGap:        8,
 		RowGap:          16,
-		MinWidth:        44,
+		MinWidth:        32,
 	}
 }
 

@@ -21,10 +21,20 @@ var (
 	adjustWindowRect    = user32.NewProc("AdjustWindowRectEx")
 	moveWindow          = user32.NewProc("MoveWindow")
 	isDialogMessage     = user32.NewProc("IsDialogMessageW")
-	invalidateRect      = user32.NewProc("InvalidateRect")
 	beginPaint          = user32.NewProc("BeginPaint")
 	endPaint            = user32.NewProc("EndPaint")
 	setScrollInfo       = user32.NewProc("SetScrollInfo")
+	getScrollInfo       = user32.NewProc("GetScrollInfo")
+	redrawWindow        = user32.NewProc("RedrawWindow")
+	fillRect            = user32.NewProc("FillRect")
+	drawText            = user32.NewProc("DrawTextW")
+	getFocus            = user32.NewProc("GetFocus")
+	setFocus            = user32.NewProc("SetFocus")
+	getControlID        = user32.NewProc("GetDlgCtrlID")
+	setTextColor        = gdi32.NewProc("SetTextColor")
+	setBkMode           = gdi32.NewProc("SetBkMode")
+	getStockObject      = gdi32.NewProc("GetStockObject")
+	setDCBrushColor     = gdi32.NewProc("SetDCBrushColor")
 	enableWindow        = user32.NewProc("EnableWindow")
 	loadCursor          = user32.NewProc("LoadCursorW")
 	createFont          = gdi32.NewProc("CreateFontW")
@@ -34,6 +44,7 @@ var (
 // SettingField 定义原生设置控件，平台层不依赖应用配置模型。
 type SettingField struct {
 	Key, Label, Value string
+	Description       string
 	Group             int
 	// Kind 为空或text时使用文本框；bool为开关，position为九宫格。
 	Kind string
@@ -51,6 +62,13 @@ type SettingsOptions struct {
 type settingsControl struct {
 	hwnd                uintptr
 	x, y, width, height int
+	fixed               bool
+}
+type settingsLabel struct {
+	text                string
+	x, y, width, height int
+	heading             bool
+	muted               bool
 }
 type scrollInfo struct {
 	size, mask uint32
@@ -72,6 +90,10 @@ type Settings struct {
 	loop                                                                   *Loop
 	options                                                                SettingsOptions
 	font                                                                   uintptr
+	headingFont                                                            uintptr
+	viewport, content                                                      uintptr
+	viewportHeight, clientWidth, clientHeight, footerTop                   int
+	labels                                                                 []settingsLabel
 	scale                                                                  float64
 	controls                                                               []settingsControl
 	inputs                                                                 map[string]uintptr
@@ -82,6 +104,7 @@ type Settings struct {
 	scroll, virtualHeight, previewX, previewY, previewWidth, previewHeight int
 	preview                                                                []byte
 	previewInfo                                                            bitmapInfo
+	wheelRemainder                                                         int
 }
 
 var settingsClass = windows.StringToUTF16Ptr("KeyViviSettings")
@@ -115,8 +138,8 @@ func NewSettings(loop *Loop, options SettingsOptions) (*Settings, error) {
 	}
 	s := &Settings{loop: loop, options: options, scale: scale, inputs: make(map[string]uintptr)}
 	const style = 0x00C00000 | 0x00080000 | 0x00020000 | 0x00200000 | 0x02000000 // 标题、关闭、最小化、滚动与子窗口裁剪。
-	clientWidth := min(s.px(846), max(1, workWidth-s.px(32)))
-	clientHeight := min(s.px(756), max(1, workHeight-s.px(72)))
+	clientWidth := min(s.px(780), max(1, workWidth-s.px(32)))
+	clientHeight := min(s.px(780), max(1, workHeight-s.px(72)))
 	box := windowRect{right: int32(clientWidth), bottom: int32(clientHeight)}
 	if ret, _, err := adjustWindowRect.Call(uintptr(unsafe.Pointer(&box)), style, 0, 0x10000); ret == 0 {
 		return nil, win32Error("AdjustWindowRectEx(settings)", err)
@@ -131,6 +154,7 @@ func NewSettings(loop *Loop, options SettingsOptions) (*Settings, error) {
 	s.hwnd = hwnd
 	settingsWindows[hwnd] = s
 	loop.dialog = hwnd
+	s.loading = true
 	if err := s.build(); err != nil {
 		s.Destroy()
 		return nil, err
@@ -147,106 +171,142 @@ func NewSettings(loop *Loop, options SettingsOptions) (*Settings, error) {
 func (s *Settings) px(value int) int { return int(math.Round(float64(value) * s.scale)) }
 
 func (s *Settings) control(class, title string, style uintptr, id, x, y, width, height int) (uintptr, error) {
+	parent := s.content
+	fixed := id < 100
+	if fixed {
+		parent = s.hwnd
+	}
 	c, t := windows.StringToUTF16Ptr(class), windows.StringToUTF16Ptr(title)
-	hwnd, _, err := createWindowEx.Call(0, uintptr(unsafe.Pointer(c)), uintptr(unsafe.Pointer(t)), style|0x50000000,
-		uintptr(s.px(x)), uintptr(s.px(y)), uintptr(s.px(width)), uintptr(s.px(height)), s.hwnd, uintptr(id), 0, 0)
+	hwnd, _, err := createWindowEx.Call(0, uintptr(unsafe.Pointer(c)), uintptr(unsafe.Pointer(t)), style|0x54000000,
+		uintptr(s.px(x)), uintptr(s.px(y)), uintptr(s.px(width)), uintptr(s.px(height)), parent, uintptr(id), 0, 0)
 	if hwnd == 0 {
 		return 0, win32Error("CreateWindowExW(settings control)", err)
 	}
-	s.controls = append(s.controls, settingsControl{hwnd, x, y, width, height})
+	s.controls = append(s.controls, settingsControl{hwnd, x, y, width, height, fixed})
 	sendMessage.Call(hwnd, 0x30, s.font, 1)
 	return hwnd, nil
 }
 
 func (s *Settings) build() error {
-	fontName := windows.StringToUTF16Ptr("Segoe UI")
+	fontName := windows.StringToUTF16Ptr("Microsoft YaHei UI")
 	s.font, _, _ = createFont.Call(uintptr(-int32(s.px(14))), 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(fontName)))
 	if s.font == 0 {
 		return fmt.Errorf("CreateFontW(settings) failed")
 	}
+	s.headingFont, _, _ = createFont.Call(uintptr(-int32(s.px(18))), 0, 0, 0, 600, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(fontName)))
+	if s.headingFont == 0 {
+		return fmt.Errorf("CreateFontW(settings heading) failed")
+	}
 	var client windowRect
 	getClientRect.Call(s.hwnd, uintptr(unsafe.Pointer(&client)))
 	logicalWidth := int(float64(client.right) / s.scale)
-	columns := 3
-	if logicalWidth < 800 {
-		columns = 1
+	// 独立视口裁剪整块内容，避免分组边框与同层控件在滚动重绘时互相覆盖。
+	createPane := func(parent uintptr, id int) (uintptr, error) {
+		h, _, err := createWindowEx.Call(0x10000, uintptr(unsafe.Pointer(settingsClass)), 0, 0x56000000,
+			0, 0, 1, 1, parent, uintptr(id), 0, 0)
+		if h == 0 {
+			return 0, win32Error("CreateWindowExW(settings pane)", err)
+		}
+		settingsWindows[h] = s
+		return h, nil
 	}
-	groupWidth := (logicalWidth - 36 - (columns-1)*16) / columns
+	var err error
+	s.viewport, err = createPane(s.hwnd, 3000)
+	if err != nil {
+		return err
+	}
+	s.content, err = createPane(s.viewport, 3001)
+	if err != nil {
+		return err
+	}
+	controlWidth := min(224, max(120, logicalWidth/3))
+	controlX := logicalWidth - 28 - controlWidth
+	labelWidth := max(60, controlX-52)
 	add := func(class, title string, style uintptr, id, x, y, width, height int) (uintptr, error) {
 		return s.control(class, title, style, id, x, y, width, height)
 	}
-	if _, err := add("STATIC", "调整后查看预览，保存后立即生效。", 0, 0, 18, 16, logicalWidth-36, 24); err != nil {
-		return err
-	}
+	y := 20
 	for group, title := range []string{"显示区域", "外观与布局", "行为与动画"} {
-		x, y := 18+(group%columns)*(groupWidth+16), 50+(group/columns)*346
-		if _, err := add("BUTTON", title, 7, 0, x, y, groupWidth, 330); err != nil {
-			return err
-		}
-		row := 0
+		s.labels = append(s.labels, settingsLabel{title, 24, y, logicalWidth - 48, 28, true, false})
+		y += 48
 		for index, field := range s.options.Fields {
 			if field.Group != group {
 				continue
 			}
+			rowHeight := 72
+			if field.Kind == "position" {
+				rowHeight = 120
+			}
+			s.labels = append(s.labels, settingsLabel{field.Label, 36, y + 6, labelWidth, 24, false, false},
+				settingsLabel{field.Description, 36, y + 34, labelWidth, 32, false, true})
 			if field.Kind == "position" {
 				for p, text := range []string{"左上", "上中", "右上", "左中", "居中", "右中", "左下", "下中", "右下"} {
-					hwnd, err := add("BUTTON", text, 4|0x10000, 2000+p, x+12+(p%3)*((groupWidth-24)/3), y+28+(p/3)*34, (groupWidth-24)/3-4, 28)
+					style := uintptr(4 | 0x4000 | 0x10000)
+					if p == 0 {
+						style |= 0x20000
+					}
+					hwnd, err := add("BUTTON", text, style, 2000+p, controlX+(p%3)*(controlWidth/3), y+4+(p/3)*34, controlWidth/3, 30)
 					if err != nil {
 						return err
 					}
 					s.positionButtons[p] = hwnd
 				}
-				row = 3
+				y += rowHeight
 				continue
 			}
-			fy := y + 28 + row*46
 			var hwnd uintptr
 			var err error
 			if field.Kind == "bool" {
-				hwnd, err = add("BUTTON", field.Label, 3|0x10000, 100+index, x+12, fy, groupWidth-24, 28)
+				hwnd, err = add("BUTTON", "启用", 3|0x4000|0x10000, 100+index, controlX+controlWidth-68, y+8, 68, 28)
 			} else {
-				if _, err := add("STATIC", field.Label, 0, 0, x+12, fy+3, groupWidth-24, 20); err != nil {
-					return err
-				}
-				hwnd, err = add("EDIT", "", 0x00800000|0x10000|0x80, 100+index, x+12, fy+22, groupWidth-24, 23)
+				hwnd, err = add("EDIT", "", 0x00800000|0x10000|0x80, 100+index, controlX, y+8, controlWidth, 28)
 			}
 			if err != nil {
 				return err
 			}
 			s.inputs[field.Key] = hwnd
-			row++
+			y += rowHeight
+		}
+		y += 24
+	}
+	s.virtualHeight = s.px(y)
+	if _, err := add("EDIT", s.options.Path, 0x00800000|0x10000|0x80|0x800, 4, 96, 0, logicalWidth-124, 26); err != nil {
+		return err
+	}
+	s.status, err = add("STATIC", "", 0, 5, 24, 36, logicalWidth-48, 38)
+	if err != nil {
+		return err
+	}
+	s.saveButton, err = add("BUTTON", "保存", 1|0x10000, 1, logicalWidth-220, 82, 92, 32)
+	if err != nil {
+		return err
+	}
+	if _, err := add("BUTTON", "取消", 0x10000, 2, logicalWidth-116, 82, 92, 32); err != nil {
+		return err
+	}
+	if _, err := add("BUTTON", "恢复默认", 0x10000, 3, 24, 82, 108, 32); err != nil {
+		return err
+	}
+	s.arrange()
+	return nil
+}
+
+func (s *Settings) arrange() {
+	var client windowRect
+	getClientRect.Call(s.hwnd, uintptr(unsafe.Pointer(&client)))
+	s.clientWidth, s.clientHeight = int(client.right), int(client.bottom)
+	s.footerTop = max(s.px(190), s.clientHeight-s.px(130))
+	s.previewX, s.previewY = 24, 50
+	s.previewWidth, s.previewHeight = max(1, int(float64(s.clientWidth)/s.scale)-48), 112
+	top := s.px(180)
+	s.viewportHeight = max(1, s.footerTop-top-s.px(12))
+	moveWindow.Call(s.viewport, 0, uintptr(top), uintptr(s.clientWidth), uintptr(s.viewportHeight), 0)
+	for _, c := range s.controls {
+		if c.fixed {
+			moveWindow.Call(c.hwnd, uintptr(s.px(c.x)), uintptr(s.footerTop+s.px(c.y)), uintptr(s.px(c.width)), uintptr(s.px(c.height)), 0)
 		}
 	}
-	below := 50 + ((3+columns-1)/columns)*346
-	if _, err := add("STATIC", "预览：左侧为位置示意，右侧为键帽示例", 0, 0, 18, below, logicalWidth-36, 24); err != nil {
-		return err
-	}
-	s.previewX, s.previewY = 18, below+30
-	s.previewWidth, s.previewHeight = max(1, logicalWidth-36), 190
-	if _, err := add("STATIC", "配置文件", 0, 0, 18, below+230, 80, 24); err != nil {
-		return err
-	}
-	if _, err := add("EDIT", s.options.Path, 0x00800000|0x10000|0x80|0x800, 0, 100, below+228, logicalWidth-118, 25); err != nil {
-		return err
-	}
-	var err error
-	s.status, err = add("STATIC", "", 0, 0, 18, below+265, logicalWidth-36, 44)
-	if err != nil {
-		return err
-	}
-	s.saveButton, err = add("BUTTON", "保存", 1|0x10000, 1, logicalWidth-218, below+312, 92, 30)
-	if err != nil {
-		return err
-	}
-	if _, err := add("BUTTON", "取消", 0x10000, 2, logicalWidth-110, below+312, 92, 30); err != nil {
-		return err
-	}
-	if _, err := add("BUTTON", "恢复默认", 0x10000, 3, 18, below+312, 108, 30); err != nil {
-		return err
-	}
-	s.virtualHeight = s.px(below + 360)
-	s.setScroll(0)
-	return nil
+	s.setScroll(s.scroll)
 }
 
 func settingsText(hwnd uintptr, text string) {
@@ -326,19 +386,31 @@ func (s *Settings) updatePreview() {
 		s.previewInfo = bitmapInfo{header: bitmapInfoHeader{size: uint32(unsafe.Sizeof(bitmapInfoHeader{})), width: int32(w), height: -int32(h), planes: 1, bitCount: 32}}
 	}
 	enableWindow.Call(s.saveButton, valid)
-	invalidateRect.Call(s.hwnd, 0, 1)
+	redrawWindow.Call(s.hwnd, 0, 0, 0x185)
 }
 
 func (s *Settings) setScroll(position int) {
-	var client windowRect
-	getClientRect.Call(s.hwnd, uintptr(unsafe.Pointer(&client)))
-	s.scroll = min(max(0, position), max(0, s.virtualHeight-int(client.bottom)))
-	info := scrollInfo{size: uint32(unsafe.Sizeof(scrollInfo{})), mask: 7, max: int32(s.virtualHeight - 1), page: uint32(client.bottom), pos: int32(s.scroll)}
+	s.scroll = min(max(0, position), max(0, s.virtualHeight-s.viewportHeight))
+	info := scrollInfo{size: uint32(unsafe.Sizeof(scrollInfo{})), mask: 7, max: int32(s.virtualHeight - 1), page: uint32(s.viewportHeight), pos: int32(s.scroll)}
 	setScrollInfo.Call(s.hwnd, 1, uintptr(unsafe.Pointer(&info)), 1)
+	moveWindow.Call(s.content, 0, uintptr(-s.scroll), uintptr(s.clientWidth), uintptr(max(1, s.virtualHeight)), 0)
+	// 整块移动后一次擦底并重绘全部子控件，不能复用滚动前的背景像素。
+	redrawWindow.Call(s.viewport, 0, 0, 0x185)
+}
+
+func (s *Settings) reveal(hwnd uintptr) {
 	for _, c := range s.controls {
-		moveWindow.Call(c.hwnd, uintptr(s.px(c.x)), uintptr(s.px(c.y)-s.scroll), uintptr(s.px(c.width)), uintptr(s.px(c.height)), 1)
+		if c.hwnd != hwnd || c.fixed {
+			continue
+		}
+		top, bottom := s.px(c.y)-s.px(8), s.px(c.y+c.height)+s.px(8)
+		if top < s.scroll {
+			s.setScroll(top)
+		} else if bottom > s.scroll+s.viewportHeight {
+			s.setScroll(bottom - s.viewportHeight)
+		}
+		return
 	}
-	invalidateRect.Call(s.hwnd, 0, 1)
 }
 
 func (s *Settings) reflow(scale float64) error {
@@ -357,17 +429,34 @@ func (s *Settings) reflow(scale float64) error {
 	x := max(int(work.left), min(int(bounds.left), int(work.right)-width))
 	y := max(int(work.top), min(int(bounds.top), int(work.bottom)-height))
 	s.loading = true
+	focus, _, _ := getFocus.Call()
+	focusID := uintptr(0)
+	for _, c := range s.controls {
+		if c.hwnd == focus {
+			focusID, _, _ = getControlID.Call(focus)
+		}
+	}
 	for _, control := range s.controls {
 		destroyWindow.Call(control.hwnd)
 	}
+	if s.viewport != 0 {
+		destroyWindow.Call(s.viewport)
+		s.viewport, s.content = 0, 0
+	}
 	s.controls = nil
+	s.labels = nil
 	clear(s.inputs)
 	s.positionButtons = [9]uintptr{}
 	if s.font != 0 {
 		deleteObject.Call(s.font)
 		s.font = 0
 	}
+	if s.headingFont != 0 {
+		deleteObject.Call(s.headingFont)
+		s.headingFont = 0
+	}
 	s.scale = scale
+	s.scroll = int(math.Round(float64(s.scroll) * ratio))
 	if ret, _, err := setWindowPos.Call(s.hwnd, 0, uintptr(x), uintptr(y), uintptr(width), uintptr(height), 0x14); ret == 0 {
 		return win32Error("SetWindowPos(settings DPI)", err)
 	}
@@ -375,7 +464,68 @@ func (s *Settings) reflow(scale float64) error {
 		return err
 	}
 	s.fill(values)
+	if focusID != 0 {
+		for _, c := range s.controls {
+			id, _, _ := getControlID.Call(c.hwnd)
+			if id == focusID {
+				setFocus.Call(c.hwnd)
+				s.reveal(c.hwnd)
+				break
+			}
+		}
+	}
 	return nil
+}
+
+func settingsFill(dc uintptr, rect windowRect, color uintptr) {
+	brush, _, _ := getStockObject.Call(18)
+	setDCBrushColor.Call(dc, color)
+	fillRect.Call(dc, uintptr(unsafe.Pointer(&rect)), brush)
+}
+
+func (s *Settings) text(dc uintptr, text string, x, y, width, height int, heading, muted bool) {
+	f := s.font
+	if heading {
+		f = s.headingFont
+	}
+	previous, _, _ := selectObject.Call(dc, f)
+	defer selectObject.Call(dc, previous)
+	color := uintptr(0x332A24)
+	if muted {
+		color = 0x80756B
+	}
+	setTextColor.Call(dc, color)
+	setBkMode.Call(dc, 1)
+	p := windows.StringToUTF16Ptr(text)
+	r := windowRect{left: int32(s.px(x)), top: int32(s.px(y)), right: int32(s.px(x + width)), bottom: int32(s.px(y + height))}
+	drawText.Call(dc, uintptr(unsafe.Pointer(p)), ^uintptr(0), uintptr(unsafe.Pointer(&r)), 0x810)
+}
+
+func (s *Settings) paint(hwnd, dc uintptr) {
+	var client windowRect
+	getClientRect.Call(hwnd, uintptr(unsafe.Pointer(&client)))
+	settingsFill(dc, client, 0xFFFFFF)
+	if hwnd == s.content {
+		for _, label := range s.labels {
+			s.text(dc, label.text, label.x, label.y, label.width, label.height, label.heading, label.muted)
+			if label.heading {
+				settingsFill(dc, windowRect{left: int32(s.px(24)), top: int32(s.px(label.y + 34)), right: int32(s.clientWidth - s.px(24)), bottom: int32(s.px(label.y + 35))}, 0xEEE7E2)
+			}
+		}
+		return
+	}
+	if hwnd != s.hwnd {
+		return
+	}
+	w := int(float64(s.clientWidth) / s.scale)
+	s.text(dc, "显示预览", 24, 14, 120, 26, true, false)
+	s.text(dc, "位置示意与示例按键 · 保存后立即生效", 148, 18, w-172, 24, false, true)
+	s.text(dc, "配置文件", 24, int(float64(s.footerTop)/s.scale)+4, 72, 24, false, true)
+	settingsFill(dc, windowRect{left: 0, top: int32(s.footerTop - s.px(8)), right: int32(s.clientWidth), bottom: int32(s.footerTop - s.px(7))}, 0xEEE7E2)
+	if len(s.preview) > 0 {
+		h := int(-s.previewInfo.header.height)
+		setDIBitsToDevice.Call(dc, uintptr(s.px(s.previewX)), uintptr(s.px(s.previewY)), uintptr(s.previewInfo.header.width), uintptr(h), 0, 0, 0, uintptr(h), uintptr(unsafe.Pointer(&s.preview[0])), uintptr(unsafe.Pointer(&s.previewInfo)), 0)
+	}
 }
 
 // Show 激活已存在的设置窗口，不创建重复草稿。
@@ -400,9 +550,26 @@ func settingsProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr 
 	s := settingsWindows[hwnd]
 	if s != nil {
 		switch message {
+		case 0x14:
+			var client windowRect
+			getClientRect.Call(hwnd, uintptr(unsafe.Pointer(&client)))
+			settingsFill(wParam, client, 0xFFFFFF)
+			return 1
+		case 0x133, 0x135, 0x138:
+			setBkMode.Call(wParam, 1)
+			setTextColor.Call(wParam, 0x332A24)
+			brush, _, _ := getStockObject.Call(18)
+			setDCBrushColor.Call(wParam, 0xFFFFFF)
+			return brush
+		case 0x318:
+			s.paint(hwnd, wParam)
+			return 0
 		case 0x400: // IsDialogMessage 查询默认按钮，用于回车保存。
 			return 0x534b0001
 		case 0x2e0:
+			if hwnd != s.hwnd {
+				break
+			}
 			scale := float64(uint16(wParam)) / 96
 			if scale > 0 && scale != s.scale {
 				if err := s.reflow(scale); err != nil {
@@ -412,12 +579,21 @@ func settingsProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr 
 			}
 			return 0
 		case 0x5:
-			if !s.loading && len(s.controls) > 0 && wParam != 1 {
-				s.setScroll(s.scroll)
+			if hwnd == s.hwnd && !s.loading && len(s.controls) > 0 && wParam != 1 {
+				s.arrange()
+				s.updatePreview()
 			}
 			return 0
 		case 0x111:
+			if s.loading {
+				return 0
+			}
 			id := int(uint16(wParam))
+			notification := uint16(wParam >> 16)
+			if notification == 0x100 || (notification == 6 && id >= 100) {
+				s.reveal(lParam)
+				return 0
+			}
 			switch {
 			case id == 1:
 				if err := s.options.Save(s.values()); err != nil {
@@ -430,6 +606,9 @@ func settingsProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr 
 			case id == 3:
 				s.fill(s.options.Defaults())
 			case id >= 2000 && id < 2009:
+				if notification != 0 {
+					return 0
+				}
 				s.position = id - 2000
 				for i, button := range s.positionButtons {
 					checked := uintptr(0)
@@ -446,10 +625,15 @@ func settingsProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr 
 			}
 			return 0
 		case 0x10:
-			s.Destroy()
+			if hwnd == s.hwnd {
+				s.Destroy()
+			}
 			return 0
 		case 0x82: // 子控件销毁后再释放其字体，并保留默认非客户区清理。
 			delete(settingsWindows, hwnd)
+			if hwnd != s.hwnd {
+				break
+			}
 			if s.loop.dialog == hwnd {
 				s.loop.dialog = 0
 			}
@@ -457,6 +641,10 @@ func settingsProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr 
 			if s.font != 0 {
 				deleteObject.Call(s.font)
 				s.font = 0
+			}
+			if s.headingFont != 0 {
+				deleteObject.Call(s.headingFont)
+				s.headingFont = 0
 			}
 			s.preview = nil
 		case 0x115:
@@ -467,11 +655,13 @@ func settingsProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr 
 			case 1:
 				position += s.px(40)
 			case 2:
-				position -= s.px(200)
+				position -= s.viewportHeight
 			case 3:
-				position += s.px(200)
+				position += s.viewportHeight
 			case 4, 5:
-				position = int(uint16(wParam >> 16))
+				info := scrollInfo{size: uint32(unsafe.Sizeof(scrollInfo{})), mask: 16}
+				getScrollInfo.Call(s.hwnd, 1, uintptr(unsafe.Pointer(&info)))
+				position = int(info.track)
 			case 6:
 				position = 0
 			case 7:
@@ -480,14 +670,16 @@ func settingsProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr 
 			s.setScroll(position)
 			return 0
 		case 0x20a:
-			s.setScroll(s.scroll - int(int16(wParam>>16))*s.px(40)/120)
+			s.wheelRemainder += int(int16(wParam >> 16))
+			steps := s.wheelRemainder / 120
+			s.wheelRemainder %= 120
+			s.setScroll(s.scroll - steps*s.px(64))
 			return 0
 		case 0xf:
 			var paint paintInfo
 			dc, _, _ := beginPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
-			if dc != 0 && len(s.preview) > 0 {
-				h := int(-s.previewInfo.header.height)
-				setDIBitsToDevice.Call(dc, uintptr(s.px(s.previewX)), uintptr(s.px(s.previewY)-s.scroll), uintptr(s.previewInfo.header.width), uintptr(h), 0, 0, 0, uintptr(h), uintptr(unsafe.Pointer(&s.preview[0])), uintptr(unsafe.Pointer(&s.previewInfo)), 0)
+			if dc != 0 {
+				s.paint(hwnd, dc)
 			}
 			endPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
 			return 0

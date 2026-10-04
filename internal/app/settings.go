@@ -22,7 +22,7 @@ func configFields(c config) []platform.SettingField {
 			position = i
 		}
 	}
-	return []platform.SettingField{
+	fields := []platform.SettingField{
 		{Key: "position", Label: "位置", Value: strconv.Itoa(position), Group: 0, Kind: "position"},
 		{Key: "offset_x", Label: "水平偏移（px）", Value: strconv.Itoa(c.Region.OffsetX), Group: 0},
 		{Key: "offset_y", Label: "垂直偏移（px）", Value: strconv.Itoa(c.Region.OffsetY), Group: 0},
@@ -40,6 +40,28 @@ func configFields(c config) []platform.SettingField {
 		{Key: "animation", Label: "启用动画", Value: strconv.FormatBool(c.Behavior.Animation), Group: 2, Kind: "bool"},
 		{Key: "start_paused", Label: "启动时暂停", Value: strconv.FormatBool(c.Behavior.StartPaused), Group: 2, Kind: "bool"},
 	}
+	descriptions := map[string]string{
+		"position":     "选择整块按键区域在主屏上的位置。",
+		"offset_x":     "正数向右，负数向左。",
+		"offset_y":     "正数向下，负数向上。",
+		"width":        "一行放不下时另起一组。",
+		"font":         "按键文字大小，尺寸随屏幕缩放。",
+		"text":         "六位十六进制颜色，如 #FFFFFF。",
+		"background":   "键帽底色，如 #14181F。",
+		"opacity":      "0 为完全透明，100 为不透明。",
+		"element_gap":  "同一组内相邻键帽的间隔。",
+		"row_gap":      "上下两组之间的距离。",
+		"groups":       "同时保留的输入组数，范围 1–6。",
+		"elements":     "每组完整输入数量，范围 2–20。",
+		"pause":        "停顿达到此时间后，输入进入新组。",
+		"hold":         "最后一次输入后，整组保持可见的时间。",
+		"animation":    "控制淡入、淡出和组间移动。",
+		"start_paused": "下次启动时生效，当前暂停状态不变。",
+	}
+	for i := range fields {
+		fields[i].Description = descriptions[fields[i].Key]
+	}
+	return fields
 }
 
 func configValues(c config) map[string]string {
