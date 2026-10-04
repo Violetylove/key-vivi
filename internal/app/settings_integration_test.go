@@ -128,10 +128,8 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 		if windowStyle&0x200000 != 0 {
 			return fmt.Errorf("settings exposes a system scrollbar")
 		}
-		var pathClass [32]uint16
-		dll.NewProc("GetClassNameW").Call(item(4000), uintptr(unsafe.Pointer(&pathClass[0])), uintptr(len(pathClass)))
-		if windows.UTF16ToString(pathClass[:]) != "Static" || read(4000) != store.path || read(4001) != "打开配置文件" || item(4) != 0 || read(5) != "" {
-			return fmt.Errorf("config path is not a final content row with an open button")
+		if item(4000) != 0 || item(4001) != 0 || read(6) != "打开配置文件" || item(4) != 0 || read(5) != "" {
+			return fmt.Errorf("config opener is not in the footer or config path remains visible")
 		}
 		count, _, _ := send.Call(item(100), 0x146, 0, 0)
 		if count != 6 || item(2000) != 0 {

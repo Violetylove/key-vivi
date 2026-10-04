@@ -40,10 +40,7 @@ var (
 	shellExecute        = windows.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
 )
 
-const (
-	settingsPathID     = 4000
-	settingsOpenPathID = 4001
-)
+const settingsOpenPathID = 6
 
 // SettingField 定义原生设置控件，平台层不依赖应用配置模型。
 type SettingField struct {
@@ -279,16 +276,6 @@ func (s *Settings) build() error {
 		}
 		y += 24
 	}
-	// 配置路径属于设置内容的最后一项，使用只读文本并提供打开按钮。
-	s.labels = append(s.labels, settingsLabel{"配置文件", 36, y + 6, labelWidth, 24, false, false})
-	pathWidth := max(120, controlX+controlWidth-164)
-	if _, err := s.control("STATIC", s.options.Path, 0x8000, settingsPathID, 36, y+38, pathWidth, 32); err != nil {
-		return err
-	}
-	if _, err := s.control("BUTTON", "打开配置文件", 0xB|0x10000, settingsOpenPathID, controlX+controlWidth-116, y+8, 116, 32); err != nil {
-		return err
-	}
-	y += 72
 	s.virtualHeight = s.px(y)
 	s.status, err = add("STATIC", "", 0, 5, 24, 4, logicalWidth-48, 28)
 	if err != nil {
@@ -302,6 +289,9 @@ func (s *Settings) build() error {
 		return err
 	}
 	if _, err := add("BUTTON", "恢复默认", 0xB|0x10000, 3, 24, 40, 108, 36); err != nil {
+		return err
+	}
+	if _, err := add("BUTTON", "打开配置文件", 0xB|0x10000, settingsOpenPathID, 144, 40, 116, 36); err != nil {
 		return err
 	}
 	s.arrange()
