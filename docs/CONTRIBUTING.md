@@ -50,17 +50,19 @@ test(platform): verify hotkey cleanup
 
 必须在仓库根目录通过以下命令，并检查 `git diff --cached`：
 
-```bash
+```powershell
 gofmt -w .
 go vet ./...
 go test -race ./...
-go build -ldflags="-s -w -H=windowsgui" -o dist/KeyVivi.exe ./cmd/keyvivi
+.\build.ps1
 ```
+
+构建流程关闭CGO、生成exe，并只修正该产物的文件完整性标签，防止继承工作区Low标签导致双击后降权；不修改工作区目录。日常启动直接双击exe。
 
 集成测试需要交互式桌面，会注入键盘事件，显式运行：
 
 ```bash
-go test -race -tags integration ./tests/integration
+go test -race -tags integration ./internal/app ./tests/integration
 ```
 
 不要提交产物（`dist/`）、测试截图或证据（`tests/artifacts/`）、密钥，或与本次改动无关的内容。不要伪造作者身份，未经同意不要重写历史。

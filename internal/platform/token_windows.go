@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"encoding/binary"
 	"fmt"
 	"unsafe"
 
@@ -17,9 +18,8 @@ const (
 
 // IntegrityLevel 返回进程令牌的强制完整性级别 RID。
 //
-// Windows 不会把发往更高完整性窗口的输入交给低完整性进程的全局键盘钩子，
-// 沙箱下钩子只能看到本进程的窗口——焦点在本窗口时才有反应。读出级别才能如实提示，
-// 而不是让程序看起来坏掉。
+// 已确认工作区产物继承Low文件标签，普通桌面启动也会降权，影响托盘及全局输入。
+// 读取级别供装配前检查；修正属于构建流程，运行时不能自行提升令牌或改目录权限。
 func IntegrityLevel() (uint32, error) {
 	token := windows.GetCurrentProcessToken()
 	var size uint32
@@ -34,14 +34,34 @@ func IntegrityLevel() (uint32, error) {
 	if err := windows.GetTokenInformation(token, windows.TokenIntegrityLevel, &buffer[0], size, &size); err != nil {
 		return 0, fmt.Errorf("GetTokenInformation(label): %w", err)
 	}
-	label := (*windows.Tokenmandatorylabel)(unsafe.Pointer(&buffer[0]))
-	sid := label.Label.Sid
-	count := int(sid.SubAuthorityCount())
-	if count == 0 {
-		return 0, fmt.Errorf("integrity label SID has no sub-authority")
+	if uintptr(len(buffer)) < unsafe.Sizeof(windows.Tokenmandatorylabel{}) {
+		return 0, fmt.Errorf("integrity label is truncated")
 	}
-	// RID 是 SID 的最后一段子授权。
-	return sid.SubAuthority(uint32(count - 1)), nil
+	label := (*windows.Tokenmandatorylabel)(unsafe.Pointer(&buffer[0]))
+	start := uintptr(unsafe.Pointer(&buffer[0]))
+	sid := uintptr(unsafe.Pointer(label.Label.Sid))
+	if sid < start || sid-start >= uintptr(len(buffer)) {
+		return 0, fmt.Errorf("integrity label SID is outside token buffer")
+	}
+	// SID在Go缓冲区内；系统包装器将uintptr转回指针会触发checkptr，改用有界字节解析。
+	return integrityRID(buffer[int(sid-start):])
+}
+
+func integrityRID(sid []byte) (uint32, error) {
+	if len(sid) < 8 || sid[0] != 1 {
+		return 0, fmt.Errorf("integrity label SID header is invalid")
+	}
+	for i, want := range []byte{0, 0, 0, 0, 0, 16} {
+		if sid[i+2] != want {
+			return 0, fmt.Errorf("integrity label SID authority is invalid")
+		}
+	}
+	count := int(sid[1])
+	if count == 0 || count > 15 || len(sid) < 8+4*count {
+		return 0, fmt.Errorf("integrity label SID sub-authorities are invalid")
+	}
+	// RID是SID的最后一段子授权。
+	return binary.LittleEndian.Uint32(sid[8+4*(count-1):]), nil
 }
 
 // RestrictedIntegrity 判断完整性级别是否低于 Medium，即普通用户进程的级别。

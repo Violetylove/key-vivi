@@ -10,7 +10,7 @@ import (
 func main() {
 	if err := app.Run(); err != nil {
 		log.Printf("application stopped: %v", err)
-		platform.ShowMessage(0, "KeyVivi 启动或运行失败", "程序已清理资源并退出。\n"+err.Error())
+		platform.ShowMessage(0, "KeyVivi 启动或运行失败", app.FailureMessage(err))
 		os.Exit(1)
 	}
 }

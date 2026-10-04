@@ -15,16 +15,19 @@ import (
 
 // Run 装配自绘窗口、输入与托盘，退出和错误均先完成资源清理。
 func Run() error {
-	if err := platform.EnableDPIAwareness(); err != nil {
-		log.Printf("DPI awareness: %v", err)
-	}
 	level, levelErr := platform.IntegrityLevel()
 	if levelErr != nil {
-		log.Printf("integrity check: %v", levelErr)
+		return fmt.Errorf("integrity check: %w", levelErr)
 	}
-	restricted := levelErr == nil && level < 0x2000
+	// Low文件标签会让普通桌面启动也降权，必须在装配托盘和钩子之前明确失败。
+	if err := checkStartupIntegrity(level); err != nil {
+		return err
+	}
 	if os.Getenv("KEYVIVI_DEBUG") != "" {
-		log.Printf("integrity level=%#x restricted=%v", level, restricted)
+		log.Printf("integrity level=%#x", level)
+	}
+	if err := platform.EnableDPIAwareness(); err != nil {
+		log.Printf("DPI awareness: %v", err)
 	}
 
 	path, err := executableConfigPath()
@@ -195,9 +198,6 @@ func Run() error {
 			}
 			if duration := readyHintDuration(); duration > 0 {
 				hint := render.HintText("KeyVivi 已启动", "KeyVivi ready")
-				if restricted {
-					hint = render.HintText(fmt.Sprintf("KeyVivi 已启动（受限环境 %#x）", level), fmt.Sprintf("KeyVivi ready (restricted %#x)", level))
-				}
 				state.showHint(hint, now, duration)
 			}
 		}
@@ -213,6 +213,9 @@ func Run() error {
 		}
 		if configErr != nil {
 			platform.ShowMessage(loop.Handle(), "KeyVivi 配置提示", "已使用默认设置，原配置未自动覆盖。\n"+configErr.Error()+"\n配置路径："+path)
+		}
+		if os.Getenv("KEYVIVI_DEBUG") != "" {
+			log.Printf("startup ready: tray=%v pause_hotkey=%v", tray != nil, pauseErr == nil)
 		}
 		_ = loop.Wake()
 		return nil

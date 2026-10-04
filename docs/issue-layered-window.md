@@ -23,7 +23,7 @@
 
 ## 排查顺序
 
-1. 记录启动路径、完整性级别、窗口站、Windows 版本和缩放；本代理工作区的运行位置限制见 [README](../README.md)。
+1. 记录启动路径、进程与exe文件的完整性级别、窗口站、Windows版本和缩放。本次已确认exe继承工作区Low标签会使普通桌面启动降权；构建完成后只修正产物为Medium，直接运行exe。说明见 [README](../README.md)及[微软MIC文档](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control)。这项修复不代表桌面捕获隔离机制也已确认。
 2. 检查窗口样式、API 返回值、DIB 尺寸、预乘 BGRA 字节、工作区与 DPI 坐标。
 3. 验证事件确实唤醒 UI、定时器未意外停止、资源未在初始化回调返回时提前销毁。
 4. 在普通桌面由资源管理器运行，人工确认可见性、半透明、焦点与点击穿透。

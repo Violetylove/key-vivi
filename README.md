@@ -6,7 +6,7 @@
 
 托盘“设置…”打开原生窗口，**显示区域、外观与布局、行为与动画**按三个小节纵向排列，每行一个配置项，左侧名称与说明、右侧控件，共16项。顶部位置示意与键帽预览、底部操作栏固定，配置内容独立滚动。保存后立即应用并关闭窗口，取消或关闭放弃草稿，恢复默认须保存才生效；保存失败保留草稿和原配置。窗口支持Tab导航、回车保存、Esc取消，焦点移入不可见项时自动滚动，DPI变化时重新排布。
 
-启动时从实际exe同目录读取 `keyvivi.yaml`，首次缺失会尝试生成带中文注释的默认文件；错误配置提示后使用默认值，保留原文件。手动编辑文件后重启加载。开发时通过 `launch.bat` 运行，配置位于 `%LOCALAPPDATA%\KeyVivi\keyvivi.yaml`，更新exe不会覆盖配置。字段、范围及保存规则见 [规格第3.5节](docs/project_spec.md#35-yaml-配置与设置窗口)。
+**直接双击 `dist\KeyVivi.exe` 启动，日常运行只需要exe。** 启动时从实际exe同目录读取 `keyvivi.yaml`，首次缺失会尝试生成带中文注释的默认文件；错误配置提示后使用默认值，保留原文件。手动编辑文件后重启加载，更新exe不会覆盖配置。字段、范围及保存规则见 [规格第3.5节](docs/project_spec.md#35-yaml-配置与设置窗口)。
 
 ## 目录
 
@@ -33,12 +33,10 @@
 ~~~powershell
 go vet ./...
 go test -race ./...
-$env:CGO_ENABLED = '0'
-go build -ldflags="-s -w -H=windowsgui" -o dist/KeyVivi.exe ./cmd/keyvivi
-Remove-Item Env:CGO_ENABLED
+.\build.ps1
 ~~~
 
-`-race` 在 Windows 上需要启用 CGO 和可用的 C 编译器，因此在设置 `CGO_ENABLED=0` 之前运行；该要求只针对竞态检查。
+`-race` 在 Windows 上需要启用 CGO 和可用的 C 编译器；该要求只针对竞态检查。`build.ps1` 仅用于开发构建，临时关闭CGO并恢复环境，再将单个产物exe的文件完整性标签设为Medium。它不启动程序，也不复制到其他目录；生成的exe可直接双击运行。
 
 集成测试会注册全局热键、创建窗口并注入 F24 按下/释放事件，需在交互桌面显式运行：
 
@@ -52,9 +50,9 @@ go test -race -tags integration ./internal/app ./tests/integration
 
 ## 启动与运行环境
 
-在本代理工作区内，之前的 A/B/A/B 实测发现 exe 运行位置会影响完整性级别：工作区内为 Low（`0x1000`），工作区外为 Medium（`0x2000`）。Low 进程无法可靠采集更高完整性应用的输入。此结论是本开发环境记录，不是所有 Windows 机器的普遍规则。
+历史A/B/A/B记录中的工作区内Low（`0x1000`）、工作区外Medium（`0x2000`）差异，已定位为构建exe继承了工作区的Low文件标签。普通桌面启动也会降为Low，表现为托盘不可用、全局按键不显示；[Windows完整性规则](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control)解释了这种启动降权。构建流程只修正产物exe，保留工作区目录的安全设置。
 
-开发时使用 [launch.bat](launch.bat)，它将 `dist\KeyVivi.exe` 复制到 `%LOCALAPPDATA%\KeyVivi` 再启动。这份副本属于启动脚本的写入；卸载时关闭进程并删除该目录。发布验收应将 exe 复制到普通目录，由资源管理器启动。
+启动入口统一为 `KeyVivi.exe`，旧启动脚本已移除。程序在装配前检查实际令牌；低于Medium时显示明确原因并退出，避免继续以“托盘失效但后台存活”的状态运行。已在本机从其他工作目录直接运行 `dist\KeyVivi.exe`，确认Medium、托盘/热键注册及F24钩子自检通过；真实桌面外观与完整发布验收仍待完成。历史 `%LOCALAPPDATA%\KeyVivi` 副本不会自动清理或更新，可退出后自行删除；该目录中的配置不会自动覆盖当前exe同目录配置。
 
 托盘提供暂停/继续、设置、关于、退出；`Ctrl+Alt+K` 切换暂停。快捷键占用时提示改用托盘；托盘不可用时注册 `Ctrl+Alt+Q` 退出兜底。无法建立必要控制入口时清理资源并结束，显示错误说明。上述路径已接入，实际菜单观感和 Explorer 重启恢复仍需真实桌面验证。
 
@@ -62,7 +60,7 @@ go test -race -tags integration ./internal/app ./tests/integration
 
 运行不记录、不上传按键内容，不设置自启动、不创建服务、不写注册表配置；字幕、字体缓存、托盘图标在内存中处理，系统字体从Windows字体目录只读加载。仅为设置保存写入实际exe同目录的 `keyvivi.yaml` 和同目录临时文件，不写按键记录或缓存。
 
-存储范围、退出清理及目标机器运行仍需发布验收，详见 [规格](docs/project_spec.md)。卸载时退出程序并删除exe及配置文件；使用启动器时还需删除开发副本目录。暂停可以避免后续敏感输入被展示，不能删除已录入视频的字幕，也不自动识别密码框。
+存储范围、退出清理及目标机器运行仍需发布验收，详见 [规格](docs/project_spec.md)。卸载时退出程序并删除exe及配置文件。暂停可以避免后续敏感输入被展示，不能删除已录入视频的字幕，也不自动识别密码框。
 
 ## 诊断
 
