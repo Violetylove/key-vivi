@@ -11,12 +11,14 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"key-vivi/internal/platform"
+	"key-vivi/internal/render"
 )
 
 func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
@@ -55,6 +57,7 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 			var err error
 			settings, err = platform.NewSettings(loop, platform.SettingsOptions{
 				Fields: configFields(active), Path: store.path,
+				Icon:     func(size int) *image.RGBA { return render.TrayIcon(size, false) },
 				Defaults: func() map[string]string { return configValues(defaultConfig()) },
 				Preview: func(values map[string]string, scale float64, width, height int) (*image.RGBA, error) {
 					if windows.GetCurrentThreadId() != owner {
@@ -108,14 +111,61 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 			return windows.UTF16ToString(buffer)
 		}
 		click := func(id int) { send.Call(item(id), 0xf5, 0, 0) }
+		choose := func(id, index int) {
+			hwnd := item(id)
+			send.Call(hwnd, 0x14e, uintptr(index), 0)
+			parent, _, _ := dll.NewProc("GetParent").Call(hwnd)
+			send.Call(parent, 0x111, uintptr(id)|1<<16, hwnd)
+		}
 		if err := open(); err != nil {
 			return err
 		}
+		style, _, _ := dll.NewProc("GetWindowLongPtrW").Call(settings.Handle(), ^uintptr(19))
+		ownerWindow, _, _ := dll.NewProc("GetWindow").Call(settings.Handle(), 4)
+		if style&0x40000 == 0 || style&0x80 != 0 || ownerWindow != 0 {
+			return fmt.Errorf("settings has no independent taskbar window: style=%#x owner=%#x", style, ownerWindow)
+		}
+		count, _, _ := send.Call(item(100), 0x146, 0, 0)
+		if count != 6 || item(2000) != 0 {
+			return fmt.Errorf("settings does not expose exactly six dropdown positions")
+		}
+		for i, want := range []string{"左上", "上中", "右上", "左下", "下中", "右下"} {
+			var text [64]uint16
+			send.Call(item(100), 0x148, uintptr(i), uintptr(unsafe.Pointer(&text[0])))
+			if windows.UTF16ToString(text[:]) != want {
+				return fmt.Errorf("position dropdown order is incorrect")
+			}
+		}
+		send.Call(item(100), 0x14f, 1, 0)
+		if expanded, _, _ := send.Call(item(100), 0x157, 0, 0); expanded == 0 {
+			return fmt.Errorf("position dropdown did not expand")
+		}
+		send.Call(item(100), 0x14f, 0, 0)
 		if read(104) != "24" {
 			return fmt.Errorf("active config not loaded into controls")
 		}
 		updateWindow.Call(settings.Handle())
 		edit(104, "30")
+		choose(116, 1)
+		for _, id := range []int{105, 106} {
+			var class [32]uint16
+			dll.NewProc("GetClassNameW").Call(item(id), uintptr(unsafe.Pointer(&class[0])), uintptr(len(class)))
+			if windows.UTF16ToString(class[:]) != "Button" {
+				return fmt.Errorf("color setting is not a swatch button")
+			}
+		}
+		if err := driveSettingsColorDialog(settings.Handle(), func() { click(105) }, "#FFFFFF", "#123456", false); err != nil {
+			return err
+		}
+		if read(105) != "#123456" || active.Appearance.TextColor != "#FFFFFF" {
+			return fmt.Errorf("color picker did not isolate accepted draft")
+		}
+		if err := driveSettingsColorDialog(settings.Handle(), func() { click(105) }, "#123456", "#AABBCC", true); err != nil {
+			return err
+		}
+		if read(105) != "#123456" {
+			return fmt.Errorf("cancelled color picker changed draft")
+		}
 		before, _ := os.ReadFile(store.path)
 		click(2)
 		after, _ := os.ReadFile(store.path)
@@ -141,11 +191,22 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 		if err := open(); err != nil {
 			return err
 		}
-		if err := checkSettingsScrollPaint(settings.Handle(), item, t); err != nil {
+		if err := checkSettingsScrollPaint(settings.Handle(), item, "mocha", t); err != nil {
+			return err
+		}
+		choose(116, 1)
+		if active.Appearance.SettingsTheme != "mocha" {
+			return fmt.Errorf("theme preview changed active config")
+		}
+		if err := checkSettingsScrollPaint(settings.Handle(), item, "latte", t); err != nil {
+			return err
+		}
+		if err := driveSettingsColorDialog(settings.Handle(), func() { click(106) }, "#14181F", "#112233", false); err != nil {
 			return err
 		}
 		edit(104, "32")
-		click(2002)
+		choose(100, 2)
+		click(114)
 		store.replace = func(string, string) error { return errors.New("replacement denied") }
 		before, _ = os.ReadFile(store.path)
 		click(1)
@@ -155,7 +216,7 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 		}
 		store.replace = nil
 		click(1)
-		if settings.Handle() != 0 || active.Appearance.FontSize != 32 || active.Region.Position != "top_right" {
+		if settings.Handle() != 0 || active.Appearance.FontSize != 32 || active.Region.Position != "top_right" || active.Behavior.Animation || active.Appearance.SettingsTheme != "latte" || active.Appearance.BackgroundColor != "#112233" {
 			return fmt.Errorf("save retry failed")
 		}
 		if err := open(); err != nil {
@@ -173,18 +234,35 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 			return err
 		}
 		edit(104, "28")
+		choose(100, 5)
 		send.Call(settings.Handle(), 0x2e0, 144|(144<<16), 0)
 		if read(104) != "28" {
 			return fmt.Errorf("DPI reflow lost draft")
 		}
-		click(2)
-		for cycle := 0; cycle < 6; cycle++ {
+		if read(106) != "#112233" {
+			return fmt.Errorf("DPI reflow lost chosen color")
+		}
+		click(1)
+		if active.Region.Position != "bottom_right" || active.Behavior.Animation || active.Appearance.SettingsTheme != "latte" {
+			return fmt.Errorf("DPI reflow lost position selection or toggle state")
+		}
+		// 两种主题先各初始化一次，再比较六次交替重开，排除原生主题缓存的首次增长。
+		for cycle := 0; cycle < 8; cycle++ {
 			if err := open(); err != nil {
 				return err
 			}
+			choose(116, cycle%2)
 			settings.Show()
 			settings.Destroy()
 			settings.Destroy()
+			gdi, _, _ := guiResources.Call(^uintptr(0), 0)
+			user, _, _ := guiResources.Call(^uintptr(0), 1)
+			if cycle == 1 {
+				baselineGDI, baselineUser = gdi, user
+			}
+			if cycle > 1 && (gdi > baselineGDI+2 || user > baselineUser+2) {
+				return fmt.Errorf("settings resource growth in reopen cycle %d: GDI %d->%d USER %d->%d", cycle, baselineGDI, gdi, baselineUser, user)
+			}
 		}
 		gdi, _, _ := guiResources.Call(^uintptr(0), 0)
 		user, _, _ := guiResources.Call(^uintptr(0), 1)
@@ -197,11 +275,72 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 		}
 		// 键盘消息经过真实消息泵，跨容器Tab后回车保存，再验证Escape取消。
 		edit(104, "26")
-		dll.NewProc("SetFocus").Call(item(104))
-		phase = -1
-		post.Call(item(104), 0x100, 9, 0)
+		dll.NewProc("SetFocus").Call(item(109))
+		phase = -5
+		started = time.Now()
+		post.Call(item(109), 0x100, 9, 0)
 		return loop.Wake()
 	}, func(time.Time) bool {
+		if phase == -5 {
+			focus, _, _ := dll.NewProc("GetFocus").Call()
+			if focus != fieldHandle(116) {
+				if time.Since(started) > 15*time.Second {
+					ui.Fail(fmt.Errorf("Tab did not focus theme dropdown"))
+					return false
+				}
+				return true
+			}
+			var field, viewport [4]int32
+			dll.NewProc("GetWindowRect").Call(focus, uintptr(unsafe.Pointer(&field)))
+			parent, _, _ := dll.NewProc("GetDlgItem").Call(settings.Handle(), 3000)
+			dll.NewProc("GetWindowRect").Call(parent, uintptr(unsafe.Pointer(&viewport)))
+			if field[1] < viewport[1] || field[3] > viewport[3] {
+				ui.Fail(fmt.Errorf("focused theme dropdown remained outside viewport"))
+				return false
+			}
+			send.Call(fieldHandle(100), 0x14e, 3, 0)
+			dll.NewProc("SetFocus").Call(fieldHandle(100))
+			phase = -3
+			post.Call(fieldHandle(100), 0x100, 0x28, 0)
+			return true
+		}
+		if phase == -3 {
+			if index, _, _ := send.Call(fieldHandle(100), 0x147, 0, 0); index != 4 {
+				if time.Since(started) > 15*time.Second {
+					ui.Fail(fmt.Errorf("Down did not select next dropdown position"))
+					return false
+				}
+				return true
+			}
+			phase = -2
+			post.Call(fieldHandle(100), 0x100, 0x73, 0)
+			return true
+		}
+		if phase == -2 {
+			if expanded, _, _ := send.Call(fieldHandle(100), 0x157, 0, 0); expanded == 0 {
+				if time.Since(started) > 15*time.Second {
+					ui.Fail(fmt.Errorf("F4 did not open dropdown"))
+					return false
+				}
+				return true
+			}
+			phase = -4
+			post.Call(fieldHandle(100), 0x100, 27, 0)
+			return true
+		}
+		if phase == -4 {
+			if settings.Handle() == 0 {
+				ui.Fail(fmt.Errorf("Escape closed settings while dropdown was expanded"))
+				return false
+			}
+			if expanded, _, _ := send.Call(fieldHandle(100), 0x157, 0, 0); expanded != 0 {
+				return true
+			}
+			phase = -1
+			dll.NewProc("SetFocus").Call(fieldHandle(104))
+			post.Call(fieldHandle(104), 0x100, 9, 0)
+			return true
+		}
 		if phase == -1 {
 			focus, _, _ := dll.NewProc("GetFocus").Call()
 			if focus == fieldHandle(105) {
@@ -215,7 +354,7 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 		}
 		if settings.Handle() == 0 {
 			if phase == 0 {
-				if active.Appearance.FontSize != 26 {
+				if active.Appearance.FontSize != 26 || active.Region.Position != "bottom_center" {
 					ui.Fail(fmt.Errorf("Enter did not save draft"))
 					return false
 				}
@@ -248,8 +387,58 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 	}
 }
 
+// 只操作本测试设置窗口拥有的系统选色器，验证真实确认与取消，不发送物理按键。
+func driveSettingsColorDialog(owner uintptr, click func(), initial, selected string, cancel bool) error {
+	u := windows.NewLazyDLL("user32.dll")
+	finished := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(5 * time.Second)
+		class := windows.StringToUTF16Ptr("#32770")
+		for time.Now().Before(deadline) {
+			var previous uintptr
+			for {
+				hwnd, _, _ := u.NewProc("FindWindowExW").Call(0, previous, uintptr(unsafe.Pointer(class)), 0)
+				if hwnd == 0 {
+					break
+				}
+				previous = hwnd
+				parent, _, _ := u.NewProc("GetWindow").Call(hwnd, 4)
+				if parent != owner {
+					continue
+				}
+				ready, _, _ := u.NewProc("GetDlgItem").Call(hwnd, 706)
+				if ready == 0 {
+					continue
+				}
+				var failure error
+				for i, id := range []uintptr{706, 707, 708} {
+					wantInitial, _ := strconv.ParseUint(initial[1+i*2:3+i*2], 16, 8)
+					var translated uint32
+					got, _, _ := u.NewProc("GetDlgItemInt").Call(hwnd, id, uintptr(unsafe.Pointer(&translated)), 0)
+					if translated == 0 || got != uintptr(wantInitial) {
+						failure = fmt.Errorf("color dialog did not initialize from swatch")
+					}
+					value, _ := strconv.ParseUint(selected[1+i*2:3+i*2], 16, 8)
+					u.NewProc("SetDlgItemInt").Call(hwnd, id, uintptr(value), 0)
+				}
+				button := uintptr(1)
+				if cancel || failure != nil {
+					button = 2
+				}
+				u.NewProc("SendMessageW").Call(hwnd, 0x111, button, 0)
+				finished <- failure
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		finished <- fmt.Errorf("owned native color picker did not appear")
+	}()
+	click()
+	return <-finished
+}
+
 // checkSettingsScrollPaint 读取窗口主动绘入DIB的结果，不以桌面截图替代人工可见性验收。
-func checkSettingsScrollPaint(hwnd uintptr, item func(int) uintptr, t *testing.T) error {
+func checkSettingsScrollPaint(hwnd uintptr, item func(int) uintptr, theme string, t *testing.T) error {
 	u := windows.NewLazyDLL("user32.dll")
 	g := windows.NewLazyDLL("gdi32.dll")
 	send := u.NewProc("SendMessageW")
@@ -307,7 +496,11 @@ func checkSettingsScrollPaint(hwnd uintptr, item func(int) uintptr, t *testing.T
 		for i := 3; i < len(got); i += 4 {
 			got[i] = 255
 		}
-		if got[0] != 255 || got[1] != 255 || got[2] != 255 {
+		background := [3]byte{46, 30, 30}
+		if theme == "latte" {
+			background = [3]byte{245, 241, 239}
+		}
+		if got[0] != background[0] || got[1] != background[1] || got[2] != background[2] {
 			return nil, fmt.Errorf("settings background was not erased")
 		}
 		if os.Getenv("KEYVIVI_SETTINGS_PREVIEW") != "" {
@@ -315,7 +508,7 @@ func checkSettingsScrollPaint(hwnd uintptr, item func(int) uintptr, t *testing.T
 			for i := 0; i < len(got); i += 4 {
 				img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = got[i+2], got[i+1], got[i], 255
 			}
-			path := filepath.Join("..", "..", "tests", "artifacts", name+".png")
+			path := filepath.Join("..", "..", "tests", "artifacts", name+"-"+theme+".png")
 			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 				return nil, err
 			}

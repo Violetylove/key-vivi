@@ -86,6 +86,7 @@ func Run() error {
 			}
 			window, err := platform.NewSettings(loop, platform.SettingsOptions{
 				Fields: configFields(activeConfig), Path: path,
+				Icon:     func(size int) *image.RGBA { return render.TrayIcon(size, false) },
 				Defaults: func() map[string]string { return configValues(defaultConfig()) },
 				Preview: func(values map[string]string, scale float64, width, height int) (*image.RGBA, error) {
 					c, err := configFromValues(values)
@@ -315,12 +316,7 @@ func Run() error {
 		if img.Bounds().Dy() > workHeight {
 			img = img.SubImage(image.Rect(0, img.Bounds().Dy()-workHeight, img.Bounds().Dx(), img.Bounds().Dy())).(*image.RGBA)
 		}
-		anchor := 0
-		for i, p := range positions {
-			if p == activeConfig.Region.Position {
-				anchor = i
-			}
-		}
+		anchor := positionAnchor(activeConfig.Region.Position)
 		x, y := platform.RegionPosition(workLeft, workTop, workWidth, workHeight, img.Bounds().Dx(), img.Bounds().Dy(), regionPixels, anchor,
 			int(math.Round(float64(activeConfig.Region.OffsetX)*workScale)), int(math.Round(float64(activeConfig.Region.OffsetY)*workScale)))
 		if err := overlay.Apply(img, x, y); err != nil {

@@ -19,10 +19,10 @@ import (
 
 func TestConfigMissingFieldsAndStrictErrors(t *testing.T) {
 	c, _, err := parseConfig([]byte("version: 1\nappearance:\n  font_size_px: 24\nbehavior:\n  animation: false\n"))
-	if err != nil || c.Appearance.FontSize != 24 || c.Behavior.Animation || c.Region != defaultConfig().Region || c.Behavior.Hold != 1500 {
+	if err != nil || c.Appearance.FontSize != 24 || c.Appearance.SettingsTheme != "mocha" || c.Behavior.Animation || c.Region != defaultConfig().Region || c.Behavior.Hold != 1500 {
 		t.Fatalf("partial config: %#v %v", c, err)
 	}
-	for _, raw := range []string{"", "[]", "region: null", "version: 2", "version: 1\nversion: 1", "unknown: 1", "region:\n  missing: 1", "appearance: [", "behavior:\n  max_groups: 0", "appearance:\n  font_size_px: 200", "appearance:\n  text_color: invalid", "behavior:\n  hold_ms: .nan", "version: 1\n---\nversion: 1", "region: &r {}\nappearance: *r", "appearance:\n  <<: {font_size_px: 20}"} {
+	for _, raw := range []string{"", "[]", "region: null", "version: 2", "version: 1\nversion: 1", "unknown: 1", "region:\n  missing: 1", "appearance: [", "behavior:\n  max_groups: 0", "appearance:\n  font_size_px: 200", "appearance:\n  text_color: invalid", "appearance:\n  settings_theme: unknown", "behavior:\n  hold_ms: .nan", "version: 1\n---\nversion: 1", "region: &r {}\nappearance: *r", "appearance:\n  <<: {font_size_px: 20}"} {
 		got, node, err := parseConfig([]byte(raw))
 		if err == nil || node != nil || got != defaultConfig() {
 			t.Fatalf("invalid config accepted: %q %#v %v", raw, got, err)
@@ -118,15 +118,15 @@ func TestInvalidConfigPreservedAndUnwritablePathUsesDefaults(t *testing.T) {
 
 func TestSettingsFieldsRoundTripAndConfiguredRuntime(t *testing.T) {
 	c := defaultConfig()
-	c.Region = regionConfig{"middle_right", -40, 30, 600}
-	c.Appearance = appearanceConfig{24, "#11AAFF", "#332211", 60, 4, 10}
+	c.Region = regionConfig{"bottom_right", -40, 30, 600}
+	c.Appearance = appearanceConfig{24, "#11AAFF", "#332211", 60, 4, 10, "latte"}
 	c.Behavior = behaviorConfig{2, 2, 300, 800, false, true}
 	values := configValues(c)
 	got, err := configFromValues(values)
-	if err != nil || got != c || len(values) != 16 {
+	if err != nil || got != c || len(values) != 17 {
 		t.Fatal(got, err)
 	}
-	for key, bad := range map[string]string{"groups": "7", "hold": "NaN", "text": "#zzzzzz", "position": "9", "animation": "invalid"} {
+	for key, bad := range map[string]string{"groups": "7", "hold": "NaN", "text": "#zzzzzz", "position": "9", "animation": "invalid", "settings_theme": "unknown"} {
 		values := configValues(c)
 		values[key] = bad
 		if _, err := configFromValues(values); err == nil {
@@ -168,6 +168,20 @@ func TestSettingsFieldsRoundTripAndConfiguredRuntime(t *testing.T) {
 }
 
 func TestRegionAnchorsAndBitmapGrowthKeepBaseline(t *testing.T) {
+	for i, p := range positions {
+		c := defaultConfig()
+		c.Region.Position = p
+		got, err := configFromValues(configValues(c))
+		want := []int{0, 1, 2, 6, 7, 8}[i]
+		if err != nil || got != c || positionAnchor(p) != want {
+			t.Fatal("position option or geometry mapping", p, got, err)
+		}
+	}
+	for _, p := range []string{"middle_left", "center", "middle_right"} {
+		if _, _, err := parseConfig([]byte("region:\n  position: " + p)); err == nil {
+			t.Fatal("removed middle position accepted", p)
+		}
+	}
 	for anchor := 0; anchor < 9; anchor++ {
 		x, y := platform.RegionPosition(-1920, 20, 1920, 1000, 420, 50, 180, anchor, 0, 0)
 		x2, y2 := platform.RegionPosition(-1920, 20, 1920, 1000, 420, 170, 180, anchor, 0, 0)
@@ -198,6 +212,7 @@ func TestRegionAnchorsAndBitmapGrowthKeepBaseline(t *testing.T) {
 
 func TestConfigNodeRoundTripPreservesEverySetting(t *testing.T) {
 	c := defaultConfig()
+	c.Appearance.SettingsTheme = "latte"
 	c.Behavior.Animation = false
 	c.Behavior.StartPaused = true
 	node, err := configNode(c)

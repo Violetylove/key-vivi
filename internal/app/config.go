@@ -36,6 +36,7 @@ type appearanceConfig struct {
 	BackgroundOpacity int    `yaml:"background_opacity_percent"`
 	ElementGap        int    `yaml:"element_gap_px"`
 	RowGap            int    `yaml:"row_gap_px"`
+	SettingsTheme     string `yaml:"settings_theme"`
 }
 type behaviorConfig struct {
 	MaxGroups   int  `yaml:"max_groups"`
@@ -46,12 +47,25 @@ type behaviorConfig struct {
 	StartPaused bool `yaml:"start_paused"`
 }
 
-var positions = []string{"top_left", "top_center", "top_right", "middle_left", "center", "middle_right", "bottom_left", "bottom_center", "bottom_right"}
+var positions = []string{"top_left", "top_center", "top_right", "bottom_left", "bottom_center", "bottom_right"}
+
+// 六个可选位置沿用几何层的九宫格编号，不能把底部误映射为中部。
+func positionAnchor(position string) int {
+	for i, p := range positions {
+		if p == position {
+			if i >= 3 {
+				return i + 3
+			}
+			return i
+		}
+	}
+	return 6
+}
 
 func defaultConfig() config {
 	return config{Version: 1,
 		Region:     regionConfig{"bottom_left", 24, -24, 420},
-		Appearance: appearanceConfig{18, "#FFFFFF", "#14181F", 88, 8, 16},
+		Appearance: appearanceConfig{18, "#FFFFFF", "#14181F", 88, 8, 16, "mocha"},
 		Behavior:   behaviorConfig{3, 8, 700, 1500, true, false}}
 }
 
@@ -64,7 +78,10 @@ func (c config) validate() error {
 		validPosition = validPosition || c.Region.Position == p
 	}
 	if !validPosition {
-		return fmt.Errorf("显示位置无效")
+		return fmt.Errorf("显示位置须为顶部或底部的六个位置之一")
+	}
+	if c.Appearance.SettingsTheme != "mocha" && c.Appearance.SettingsTheme != "latte" {
+		return fmt.Errorf("设置主题须为 mocha 或 latte")
 	}
 	for _, value := range []struct {
 		name             string
@@ -196,14 +213,15 @@ func (s *configStore) load() (config, error) {
 }
 
 var configComments = map[string]string{
-	"version":      "配置版本；尺寸为逻辑像素，时间为毫秒。",
-	"region":       "显示区域：位置以主显示器工作区为基准。",
-	"position":     "九宫格：top_left / top_center / top_right / middle_left / center / middle_right / bottom_left / bottom_center / bottom_right。",
-	"offset_x_px":  "水平偏移：正数向右，负数向左。",
-	"offset_y_px":  "垂直偏移：正数向下，负数向上。",
-	"max_width_px": "最大行宽：160–1200。",
-	"appearance":   "外观与布局。",
-	"font_size_px": "字号：12–48。", "text_color": "文字颜色：加引号的 #RRGGBB。",
+	"version":        "配置版本；尺寸为逻辑像素，时间为毫秒。",
+	"region":         "显示区域：位置以主显示器工作区为基准。",
+	"position":       "顶部或底部：top_left / top_center / top_right / bottom_left / bottom_center / bottom_right。",
+	"offset_x_px":    "水平偏移：正数向右，负数向左。",
+	"offset_y_px":    "垂直偏移：正数向下，负数向上。",
+	"max_width_px":   "最大行宽：160–1200。",
+	"appearance":     "外观与布局。",
+	"settings_theme": "设置窗口配色：mocha（深色）或 latte（浅色）。",
+	"font_size_px":   "字号：12–48。", "text_color": "文字颜色：加引号的 #RRGGBB。",
 	"background_color": "背景颜色：加引号的 #RRGGBB。", "background_opacity_percent": "背景不透明度：0–100；0为透明。",
 	"element_gap_px": "元素间距：0–40。", "row_gap_px": "行间距：0–40。",
 	"behavior": "行为与动画。", "max_groups": "最多组数：1–6，包含退场组。",
