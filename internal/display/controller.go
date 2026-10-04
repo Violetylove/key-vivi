@@ -5,13 +5,16 @@ import (
 	"time"
 )
 
-// Controller 由 Fyne 运行时单线程持有；工作协程不直接改其状态。
+// Controller 由 UI 消息循环单线程持有；工作协程不直接改其状态。
 type Controller struct {
 	Queue   Queue
 	Paused  bool
 	state   *keyboard.State
 	held    map[uint32]bool
 	blocked map[uint32]bool
+	cutoff  time.Time
+	// FilterExitHotkey 仅在应用成功注册退出热键时启用。
+	FilterExitHotkey bool
 }
 
 func NewController() *Controller {
@@ -27,6 +30,12 @@ func (c *Controller) TogglePause() {
 	}
 }
 func (c *Controller) Handle(e keyboard.Event, now time.Time) {
+	if !e.When.IsZero() {
+		if e.When.Before(c.cutoff) {
+			return
+		}
+		now = e.When
+	}
 	if e.IsDown {
 		c.held[e.VKCode] = true
 	} else {
@@ -42,8 +51,11 @@ func (c *Controller) Handle(e keyboard.Event, now time.Time) {
 			alt = true
 		}
 	}
-	if e.VKCode == 0x4B && ctrl && alt {
+	if e.IsDown && (e.VKCode == 0x4B || e.VKCode == 0x51 && c.FilterExitHotkey) && ctrl && alt {
 		c.state = keyboard.NewState()
+		for vk := range c.held {
+			c.blocked[vk] = true
+		}
 		return
 	}
 	if c.Paused {
@@ -62,6 +74,19 @@ func (c *Controller) Handle(e keyboard.Event, now time.Time) {
 	}
 	// 暂停或重置后，不为仍按住的键补造修饰键。
 	if text := c.state.Handle(e, now); text != "" {
-		c.Queue.Push(text, now)
+		c.Queue.Push(text, now, c.state.RepeatCount())
 	}
+}
+
+// ResetInput 用物理按下快照恢复状态，并丢弃重置之前排队的输入。
+func (c *Controller) ResetInput(held []uint32, cutoff time.Time) {
+	c.Queue.Clear()
+	c.state = keyboard.NewState()
+	clear(c.held)
+	clear(c.blocked)
+	for _, vk := range held {
+		c.held[vk] = true
+		c.blocked[vk] = true
+	}
+	c.cutoff = cutoff
 }

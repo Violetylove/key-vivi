@@ -45,7 +45,7 @@ func TestInputSequences(t *testing.T) {
 func TestRepeatAndThreshold(t *testing.T) {
 	s := keyboard.NewState()
 	now := time.Now()
-	for i, want := range []string{"A", "A ×2", "A ×3"} {
+	for i, want := range []string{"A", "A", "A ×3"} {
 		if got := s.Handle(keyboard.Event{VKCode: 0x41, IsDown: true}, now.Add(time.Duration(i)*100*time.Millisecond)); got != want {
 			t.Fatal(got)
 		}
@@ -61,7 +61,10 @@ func TestRepeatAndThreshold(t *testing.T) {
 	if got := s.Handle(keyboard.Event{VKCode: 0x43, IsDown: true}, now.Add(2*time.Second)); got != "Ctrl+C" {
 		t.Fatal(got)
 	}
-	if got := s.Handle(keyboard.Event{VKCode: 0x43, IsDown: true}, now.Add(2100*time.Millisecond)); got != "Ctrl+C ×2" {
+	if got := s.Handle(keyboard.Event{VKCode: 0x43, IsDown: true}, now.Add(2100*time.Millisecond)); got != "Ctrl+C" {
+		t.Fatal(got)
+	}
+	if got := s.Handle(keyboard.Event{VKCode: 0x43, IsDown: true}, now.Add(2200*time.Millisecond)); got != "Ctrl+C ×3" {
 		t.Fatal(got)
 	}
 }

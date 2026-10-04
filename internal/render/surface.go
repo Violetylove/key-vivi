@@ -70,6 +70,25 @@ func (s *surface) fillRounded(left, top, right, bottom, radius float64, c color.
 	}
 }
 
+// strokeRounded 只绘制轮廓，避免描边在键帽中央叠加导致背景透明度改变。
+func (s *surface) strokeRounded(left, top, right, bottom, radius, thickness float64, c color.RGBA) {
+	if right <= left || bottom <= top || thickness <= 0 {
+		return
+	}
+	radius = math.Min(radius, math.Min((right-left)/2, (bottom-top)/2))
+	for y := int(math.Floor(top)) - 1; y <= int(math.Ceil(bottom))+1; y++ {
+		for x := int(math.Floor(left)) - 1; x <= int(math.Ceil(right))+1; x++ {
+			px, py := float64(x)+.5, float64(y)+.5
+			outer := roundedCoverage(px, py, left, top, right, bottom, radius)
+			inner := 0.0
+			if right-left > 2*thickness && bottom-top > 2*thickness {
+				inner = roundedCoverage(px, py, left+thickness, top+thickness, right-thickness, bottom-thickness, math.Max(0, radius-thickness))
+			}
+			s.blend(x, y, c, math.Max(0, outer-inner))
+		}
+	}
+}
+
 // roundedCoverage 返回像素中心落在圆角矩形内的比例，边界处约 1 像素过渡。
 func roundedCoverage(px, py, left, top, right, bottom, radius float64) float64 {
 	halfW := (right - left) / 2

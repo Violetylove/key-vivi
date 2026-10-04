@@ -44,7 +44,7 @@ func TestLayeredWindowAcceptsRenderedBar(t *testing.T) {
 				problems = append(problems, fmt.Sprintf("NewLayeredWindow: %v", err))
 				return nil
 			}
-			defer window.Destroy()
+			loop.OnCleanup(window.Destroy)
 
 			if err := window.Apply(bitmap, wantX, wantY); err != nil {
 				problems = append(problems, fmt.Sprintf("Apply: %v", err))
@@ -53,8 +53,7 @@ func TestLayeredWindowAcceptsRenderedBar(t *testing.T) {
 			harness := windows.NewLazyDLL("user32.dll")
 			hwnd := window.Handle()
 
-			// WS_EX_LAYERED 在这里是必需项：内容由 UpdateLayeredWindow 提交，
-			// 没有 OpenGL 参与，不会再出现此前"可见却零像素"的情况。
+			// 逐像素透明依赖分层样式，位图提交成功不能替代真实桌面可见性验收。
 			exIndex := int32(-20)
 			exStyle, _, _ := harness.NewProc("GetWindowLongW").Call(hwnd, uintptr(exIndex))
 			required := uintptr(0x00080000 | 0x00000080 | 0x08000000 | 0x00000020)
@@ -131,7 +130,7 @@ func TestOverlayPreview(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			defer window.Destroy()
+			loop.OnCleanup(window.Destroy)
 			// 先给窗口一个尺寸，才能问到它所在的显示器。
 			if err := window.Apply(bitmap, 0, 0); err != nil {
 				return err

@@ -5,6 +5,7 @@
 *.test
 coverage.out
 config.ini
+/keyvivi.yaml
 
 # Editor and OS files
 .vscode/

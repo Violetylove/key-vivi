@@ -10,12 +10,12 @@ import (
 	"sync"
 
 	"golang.org/x/image/font"
-	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/font/gofont/goregular"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 )
 
-// 按顺序尝试系统字体；全部失败时退回 x/image 自带的位图字体，保证仍有可读输出。
+// 系统字体失败时使用内嵌轮廓字体，降级后仍保持相同的 DPI 缩放规则。
 var fontCandidates = []string{"Deng.ttf", "msyh.ttc", "simhei.ttf", "simsun.ttc"}
 
 var (
@@ -60,50 +60,83 @@ func parseFont(data []byte) (*opentype.Font, error) {
 	return collection.Font(0)
 }
 
-// faceCache 按 DPI 缓存 face；DPI 变化（换显示器）时重建。
+type cachedFace struct {
+	size, dpi float64
+	face      font.Face
+}
+
+// faceCache 保留最近的字体，键名与小计数交替绘制时不反复解析字体。
 type faceCache struct {
-	mu    sync.Mutex
-	dpi   float64
-	size  float64
-	face  font.Face
-	inUse bool
+	mu     sync.Mutex
+	parsed *opentype.Font
+	faces  []cachedFace
 }
 
 var cache faceCache
 
-// faceFor 返回指定字号与 DPI 的字体 face。调用方不要关闭返回的 face。
+// faceFor 只在持有 cache.mu 时调用，锁必须覆盖测量、绘制与关闭整个过程。
 func faceFor(size, dpi float64) (font.Face, error) {
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	if cache.inUse && cache.face != nil && cache.dpi == dpi && cache.size == size {
-		return cache.face, nil
+	for i, item := range cache.faces {
+		if item.dpi == dpi && item.size == size {
+			copy(cache.faces[i:], cache.faces[i+1:])
+			cache.faces[len(cache.faces)-1] = item
+			return item.face, nil
+		}
 	}
-	if cache.face != nil {
-		cache.face.Close()
-		cache.face = nil
-		cache.inUse = false
+	if cache.parsed == nil {
+		data, err := systemFontData()
+		if err != nil {
+			data = goregular.TTF
+		}
+		parsed, err := parseFont(data)
+		if err != nil {
+			return nil, fmt.Errorf("parse font: %w", err)
+		}
+		cache.parsed = parsed
 	}
-	data, err := systemFontData()
-	if err != nil {
-		// 位图字体只有一种固定尺寸，仍可保证有输出。
-		cache.face = basicfont.Face7x13
-		cache.dpi, cache.size, cache.inUse = dpi, size, true
-		return cache.face, nil
-	}
-	parsed, err := parseFont(data)
-	if err != nil {
-		return nil, fmt.Errorf("parse font: %w", err)
-	}
-	face, err := opentype.NewFace(parsed, &opentype.FaceOptions{
-		Size:    size,
+	face, err := opentype.NewFace(cache.parsed, &opentype.FaceOptions{
+		// 逻辑像素转为点，DPI 只在这里缩放一次。
+		Size:    size * 72 / 96,
 		DPI:     dpi,
 		Hinting: font.HintingFull,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("new face: %w", err)
 	}
-	cache.face, cache.dpi, cache.size, cache.inUse = face, dpi, size, true
+	// 限制超宽输入/DPI 变化产生的字号缓存，避免长时间使用持续增长。
+	if len(cache.faces) == 16 {
+		cache.faces[0].face.Close()
+		cache.faces = cache.faces[1:]
+	}
+	cache.faces = append(cache.faces, cachedFace{size: size, dpi: dpi, face: face})
 	return face, nil
+}
+
+// CloseFonts 释放字体 face，退出时与测量、绘制串行。
+func CloseFonts() {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	for _, item := range cache.faces {
+		item.face.Close()
+	}
+	cache.faces = nil
+	cache.parsed = nil
+}
+
+// HintText 在所用字体缺少提示字形时返回英文提示，避免降级后显示方框。
+func HintText(primary, fallback string) string {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	face, err := faceFor(18, 96)
+	if err != nil {
+		return fallback
+	}
+	for _, r := range primary {
+		if _, ok := face.GlyphAdvance(r); !ok {
+			return fallback
+		}
+	}
+	return primary
 }
 
 // textSize 返回文本在给定 face 下的像素尺寸。

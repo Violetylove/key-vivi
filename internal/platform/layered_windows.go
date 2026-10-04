@@ -68,7 +68,7 @@ type blendFunction struct {
 type winSize struct{ cx, cy int32 }
 
 // LayeredWindow 是一个逐像素 alpha 的置顶叠加窗口，内容由调用方提供的位图决定。
-// 这解决了此前 OpenGL 与分层窗口冲突的问题：这里不再有 GL，位图由我们自己提交。
+// 位图由 UpdateLayeredWindow 提交，WS_EX_LAYERED 是逐像素透明的必需样式。
 //
 // 窗口有线程亲和性，必须在 UI 线程上创建与使用。
 type LayeredWindow struct {
@@ -151,8 +151,10 @@ func (w *LayeredWindow) Apply(img *image.RGBA, x, y int) error {
 	}
 	// 仅靠 UpdateLayeredWindow 有时不会让窗口管理器接手分层表面，
 	// 再显式要求显示并置顶一次。
-	setWindowPos.Call(w.hwnd, ^uintptr(0), uintptr(x), uintptr(y), uintptr(w.width), uintptr(w.height),
-		swpNoActivate|swpShowWindow)
+	if ret, _, err := setWindowPos.Call(w.hwnd, ^uintptr(0), uintptr(x), uintptr(y), uintptr(w.width), uintptr(w.height),
+		swpNoActivate|swpShowWindow); ret == 0 {
+		return win32Error("SetWindowPos(layered)", err)
+	}
 	traceLayered("apply hwnd=%#x dc=%#x memdc=%#x bmp=%#x px=%p %dx%d at %d,%d ret=%d err=%v first=%v",
 		w.hwnd, w.screenDC, w.memDC, w.bitmap, w.pixels, w.width, w.height, x, y, ret, err, w.samplePixels())
 	return nil
@@ -227,7 +229,12 @@ func (w *LayeredWindow) ensureSurface(width, height int) error {
 	if bitmap == 0 {
 		return win32Error("CreateDIBSection", err)
 	}
-	w.oldBitmap, _, _ = selectObject.Call(w.memDC, bitmap)
+	old, _, err := selectObject.Call(w.memDC, bitmap)
+	if old == 0 || old == ^uintptr(0) {
+		deleteObject.Call(bitmap)
+		return win32Error("SelectObject(layered)", err)
+	}
+	w.oldBitmap = old
 	w.bitmap, w.pixels = bitmap, bits
 	w.width, w.height = width, height
 	return nil

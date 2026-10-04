@@ -23,7 +23,7 @@ const (
 	ModNoRepeat = 0x4000
 )
 
-// StartHotkey 注册全局快捷键。回调在后台协程串行执行，UI 操作请用 fyne.Do 转交。
+// StartHotkey 注册全局快捷键。回调在后台协程串行执行，UI 操作需投递通知并唤醒消息循环。
 // stop 可重复调用，会释放注册，也可在回调里调用；已在执行的回调可能在 stop 返回后才结束。
 func StartHotkey(modifiers, key uint32, callback func()) (stop func(), err error) {
 	if callback == nil {
@@ -35,7 +35,7 @@ func StartHotkey(modifiers, key uint32, callback func()) (stop func(), err error
 	}
 	ready := make(chan error, 1)
 	finished := make(chan struct{})
-	notifications := make(chan struct{}, 1)
+	notifications := make(chan struct{}, 64)
 	go func() {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()

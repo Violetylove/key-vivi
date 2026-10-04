@@ -3,6 +3,7 @@ package platform
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -20,8 +21,6 @@ var (
 	dispatchMsg     = user32.NewProc("DispatchMessageW")
 	postQuitMessage = user32.NewProc("PostQuitMessage")
 	postMessage     = user32.NewProc("PostMessageW")
-	setTimer        = user32.NewProc("SetTimer")
-	killTimer       = user32.NewProc("KillTimer")
 	getModuleHandle = windows.NewLazyDLL("kernel32.dll").NewProc("GetModuleHandleW")
 )
 
@@ -30,8 +29,9 @@ const (
 	wmAppWake = 0x8000 + 1
 	// wmAppTray 是托盘图标的回调消息。
 	wmAppTray  = 0x8000 + 2
-	timerID    = 1
-	tickMillis = 16
+	wmAppQuit  = 0x8000 + 3
+	wmAppFrame = 0x8000 + 4
+	tickPeriod = 16 * time.Millisecond
 )
 
 type wndClassEx struct {
@@ -61,29 +61,45 @@ type msgStruct struct {
 
 // Loop 是 UI 线程的消息循环。窗口、定时器与全部显示状态都归它所有。
 type Loop struct {
-	hwnd   uintptr
-	tick   func(time.Time) bool
-	timer  atomic.Bool
-	dispay atomic.Uint64
+	hwnd            uintptr
+	tick            func(time.Time) bool
+	clockStop       chan struct{}
+	clockDone       chan struct{}
+	clockGeneration uintptr
+	framePending    atomic.Bool
+	clockError      atomic.Pointer[error]
+	display         atomic.Uint64
+	pending         atomic.Bool
+	closed          atomic.Bool
+	quitting        atomic.Bool
+	err             error
+	cleanup         []func()
+	onMessage       func(uint32, uintptr, uintptr) bool
+	dialog          uintptr
 }
 
 // 单实例：Win32 的窗口过程是全局回调，无法携带上下文。
 var activeLoop atomic.Pointer[Loop]
 
-// onTrayMessage 由托盘注册，收到托盘回调消息时在 UI 线程上被调用。
-var onTrayMessage func(lParam uintptr)
-
 var windowClass = windows.StringToUTF16Ptr("KeyViviWindow")
+var classOnce sync.Once
+var classError error
+var windowCallback = syscall.NewCallback(windowProc)
 
 // registerWindowClass 注册供消息窗口与叠加窗口共用的窗口类。
 func registerWindowClass() error {
+	classOnce.Do(func() { classError = registerWindowClassOnce() })
+	return classError
+}
+
+func registerWindowClassOnce() error {
 	instance, _, _ := getModuleHandle.Call(0)
 	if instance == 0 {
 		return fmt.Errorf("GetModuleHandleW failed")
 	}
 	class := wndClassEx{
 		cbSize:        uint32(unsafe.Sizeof(wndClassEx{})),
-		lpfnWndProc:   syscall.NewCallback(windowProc),
+		lpfnWndProc:   windowCallback,
 		hInstance:     instance,
 		lpszClassName: windowClass,
 	}
@@ -97,7 +113,7 @@ func registerWindowClass() error {
 // Run 在调用线程创建隐藏消息窗口并跑消息循环，直到 Quit。
 //
 // onReady 在窗口就绪后调用一次，用于创建叠加窗口与托盘图标。
-// tick 由 16ms 定时器驱动；返回 false 表示暂停时钟，直到再次 Wake。
+// tick 由 16ms 时钟唤醒 UI 线程；返回 false 表示停表，直到再次 Wake。
 func Run(onReady func(*Loop) error, tick func(time.Time) bool) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -112,8 +128,17 @@ func Run(onReady func(*Loop) error, tick func(time.Time) bool) error {
 	defer destroyWindow.Call(hwnd)
 
 	loop := &Loop{hwnd: hwnd, tick: tick}
-	activeLoop.Store(loop)
-	defer activeLoop.Store(nil)
+	if !activeLoop.CompareAndSwap(nil, loop) {
+		return fmt.Errorf("a UI loop is already running")
+	}
+	defer func() {
+		loop.closed.Store(true)
+		loop.stopClock()
+		for i := len(loop.cleanup) - 1; i >= 0; i-- {
+			loop.cleanup[i]()
+		}
+		activeLoop.Store(nil)
+	}()
 
 	if onReady != nil {
 		if err := onReady(loop); err != nil {
@@ -151,7 +176,17 @@ func (l *Loop) pump() error {
 		case -1:
 			return win32Error("GetMessageW", err)
 		case 0:
-			return nil
+			if l.err == nil {
+				if err := l.clockError.Load(); err != nil {
+					return *err
+				}
+			}
+			return l.err
+		}
+		if l.dialog != 0 {
+			if handled, _, _ := isDialogMessage.Call(l.dialog, uintptr(unsafe.Pointer(&message))); handled != 0 {
+				continue
+			}
 		}
 		translateMsg.Call(uintptr(unsafe.Pointer(&message)))
 		dispatchMsg.Call(uintptr(unsafe.Pointer(&message)))
@@ -162,36 +197,94 @@ func (l *Loop) pump() error {
 func (l *Loop) Handle() uintptr { return l.hwnd }
 
 // Wake 让 UI 线程立即处理一次 tick，并在需要时启动时钟。可从任意协程调用。
-func (l *Loop) Wake() {
-	postMessage.Call(l.hwnd, wmAppWake, 0, 0)
+func (l *Loop) Wake() error {
+	if l.closed.Load() || l.quitting.Load() || !l.pending.CompareAndSwap(false, true) {
+		return nil
+	}
+	if ret, _, err := postMessage.Call(l.hwnd, wmAppWake, 0, 0); ret == 0 {
+		l.pending.Store(false)
+		return win32Error("PostMessageW(wake)", err)
+	}
+	return nil
 }
 
 // Quit 结束消息循环。
 func (l *Loop) Quit() {
-	postMessage.Call(l.hwnd, 0x0012 /* WM_QUIT */, 0, 0)
+	if l.closed.Load() || !l.quitting.CompareAndSwap(false, true) {
+		return
+	}
+	if ret, _, _ := postMessage.Call(l.hwnd, wmAppQuit, 0, 0); ret == 0 {
+		l.quitting.Store(false)
+	}
 }
 
-// DisplayGeneration 每次显示器或 DPI 变化时递增，调用方可据此重新定位。
-func (l *Loop) DisplayGeneration() uint64 { return l.dispay.Load() }
+// OnCleanup 在循环退出或初始化失败时，于 UI 线程逆序释放资源。
+func (l *Loop) OnCleanup(cleanup func()) { l.cleanup = append(l.cleanup, cleanup) }
+
+// Fail 在 UI 线程记录错误并请求退出，保留正常资源清理路径。
+func (l *Loop) Fail(err error) {
+	if l.err == nil {
+		l.err = err
+	}
+	l.Quit()
+}
+
+// DisplayGeneration 在显示器、DPI 或工作区设置变化时递增，供调用方重新定位。
+func (l *Loop) DisplayGeneration() uint64 { return l.display.Load() }
 
 func (l *Loop) startClock() {
-	if l.timer.CompareAndSwap(false, true) {
-		setTimer.Call(l.hwnd, timerID, tickMillis, 0)
+	if l.clockStop != nil {
+		return
 	}
+	l.clockGeneration++
+	stop := make(chan struct{})
+	l.clockStop = stop
+	done := make(chan struct{})
+	l.clockDone = done
+	// WM_TIMER 实测帧间隔抖动明显；Go 运行时使用高精度时钟，协程只投递消息。
+	go func(generation uintptr) {
+		defer close(done)
+		ticker := time.NewTicker(tickPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if !l.framePending.CompareAndSwap(false, true) {
+					continue
+				}
+				if ret, _, err := postMessage.Call(l.hwnd, wmAppFrame, generation, 0); ret == 0 {
+					l.framePending.Store(false)
+					failure := win32Error("PostMessageW(frame)", err)
+					l.clockError.Store(&failure)
+					l.Quit()
+					return
+				}
+			}
+		}
+	}(l.clockGeneration)
 }
 
 func (l *Loop) stopClock() {
-	if l.timer.CompareAndSwap(true, false) {
-		killTimer.Call(l.hwnd, timerID)
+	if l.clockStop != nil {
+		close(l.clockStop)
+		// 窗口销毁前等投递协程退出，避免消息打到被复用的 HWND。
+		<-l.clockDone
+		l.clockStop = nil
+		l.clockDone = nil
 	}
 }
 
-// runTick 执行一次刷新；tick 返回 false 时暂停时钟以保持空闲零占用。
+// runTick 在没有待推进状态时停表，避免空闲时持续刷新。
 func (l *Loop) runTick() {
-	if l.tick == nil {
+	if l.quitting.Load() || l.tick == nil {
+		l.stopClock()
 		return
 	}
-	if !l.tick(time.Now()) {
+	if l.tick(time.Now()) && !l.quitting.Load() {
+		l.startClock()
+	} else {
 		l.stopClock()
 	}
 }
@@ -200,27 +293,33 @@ func windowProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 	loop := activeLoop.Load()
 	switch message {
 	case wmAppWake:
-		if loop != nil {
-			loop.startClock()
+		if loop != nil && hwnd == loop.hwnd {
+			loop.pending.Store(false)
 			loop.runTick()
 		}
 		return 0
-	case 0x0113: // WM_TIMER
-		if loop != nil {
-			loop.runTick()
+	case wmAppFrame:
+		if loop != nil && hwnd == loop.hwnd {
+			loop.framePending.Store(false)
+			// 已停表或来自上一轮时钟的消息，不能重启空闲动画。
+			if loop.clockStop != nil && wParam == loop.clockGeneration {
+				loop.runTick()
+			}
 		}
 		return 0
-	case 0x007E, 0x02E0: // WM_DISPLAYCHANGE, WM_DPICHANGED
+	case 0x007E, 0x02E0, 0x001A: // 显示器、DPI 与工作区设置变化后重新定位。
 		if loop != nil {
-			loop.dispay.Add(1)
-			loop.startClock()
-			loop.runTick()
+			loop.display.Add(1)
+			loop.Wake()
 		}
 		return 0
-	case wmAppTray:
-		if onTrayMessage != nil {
-			onTrayMessage(lParam)
+	case wmAppQuit:
+		if loop != nil && hwnd == loop.hwnd {
+			postQuitMessage.Call(0)
 		}
+		return 0
+	}
+	if loop != nil && hwnd == loop.hwnd && loop.onMessage != nil && loop.onMessage(message, wParam, lParam) {
 		return 0
 	}
 	ret, _, _ := defWindowProc.Call(hwnd, uintptr(message), wParam, lParam)

@@ -9,6 +9,7 @@ import (
 type Event struct {
 	VKCode uint32
 	IsDown bool
+	When   time.Time
 }
 type State struct {
 	held     map[uint32]bool
@@ -104,11 +105,14 @@ func (s *State) repeat(value string, now time.Time) string {
 		s.count = 1
 	}
 	s.last, s.lastTime = value, now
-	if s.count > 1 {
+	if s.count > 2 {
 		return fmt.Sprintf("%s ×%d", value, s.count)
 	}
 	return value
 }
+
+// RepeatCount 返回最近一次有效输入的连按次数，队列从第三次才合并本组输入。
+func (s *State) RepeatCount() int { return s.count }
 func getKeyName(vk uint32) string {
 	if name := ModifierName(vk); name != "" {
 		return name

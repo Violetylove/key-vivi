@@ -28,6 +28,9 @@ func TestLiveKeyboardHook(t *testing.T) {
 	for !down || !up {
 		select {
 		case e := <-events:
+			if e.When.IsZero() {
+				t.Fatal("hook event has no capture timestamp")
+			}
 			if e.VKCode == 0x87 {
 				if e.IsDown {
 					down = true
@@ -41,6 +44,40 @@ func TestLiveKeyboardHook(t *testing.T) {
 	}
 }
 
+func TestHookOverflowStillWakesAndStops(t *testing.T) {
+	events := make(chan keyboard.Event, 1)
+	wakes := make(chan struct{}, 32)
+	before := platform.HookDroppedCount()
+	stop, err := platform.StartKeyboardHookWithWake(events, func() {
+		select {
+		case wakes <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	for i := 0; i < 8; i++ {
+		platform.SendTestKey()
+	}
+	deadline := time.After(2 * time.Second)
+	for platform.HookDroppedCount() == before {
+		select {
+		case <-wakes:
+		case <-deadline:
+			t.Fatal("full buffer did not wake or report overflow")
+		}
+	}
+	stopped := make(chan struct{})
+	go func() { stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("overflow prevented hook shutdown")
+	}
+}
+
 // TestHookSelfCheck 覆盖应用使用的导出自检路径与回调计数，避免
 // TestLiveKeyboardHook 通过、而计数器始终不涨的情况被漏掉。
 func TestHookSelfCheck(t *testing.T) {
@@ -49,7 +86,7 @@ func TestHookSelfCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stop()
+	defer func() { stop(); close(events) }()
 	go func() {
 		for range events {
 		}

@@ -1,293 +1,169 @@
-# KeyVivi 架构设计：弃用 Fyne，自绘叠加层
+# KeyVivi 设计文档
 
-**状态**：已评审，按此开发  
-**日期**：2026-10-02  
-**取代**：`internal/ui`（Fyne 装配层）  
-**验收依据**：[project_spec.md](<project_spec.md>) 的 M05、M10 两组用例
+更新日期：2026-10-04（Asia/Shanghai）。本文维护架构、模块及实现方式；产品需求、里程碑、进度和验收统一见 [项目规格](project_spec.md)，开发协作规则见 [AGENTS.md](../AGENTS.md)。目标设计不代表已实现或已通过验收。
 
----
+## 1. 目标与边界
 
-## 1. 目标与非目标
+采用 Go、Win32 分层窗口与内存位图渲染，交付单 exe 的 Windows 10/11 x64 按键可视化工具。默认白色键名、独立深色半透明圆角键帽、细描边与底部阴影；组合键完整显示为一个元素，组间空隙透明；无边框、置顶、鼠标穿透且不抢焦点。
 
-**目标**
+v1.0目标包含FIFO、暂停、托盘、淡入淡出、DPI缩放、可靠退出、不记录按键，以及YAML配置与原生设置窗口；这些主路径已接入，正式桌面与发布验收待完成。不引入安装器、服务或自动启动。可选风格、鼠标和多显示器跟随留到v2.0。
 
-1. 字幕支持**真正的整窗半透明**、**圆角**、**按内容自适应宽度**。
-2. 支持**真正的淡入淡出**（淡入 100ms、停留 1500ms、淡出 300ms）。
-3. 把 exe 从 23.3 MB 降到约 4 MB 量级。
-4. 不再向 `%APPDATA%\fyne`、`%LOCALAPPDATA%\fyne`、`%TEMP%` 写入任何文件，绿色分发不再需要妥协条款。
-5. 渲染逻辑纯 Go、可单元测试——不再依赖桌面才能验证。
+## 2. 模块与依赖
 
-**非目标（本阶段不做）**
+~~~text
+cmd/keyvivi/main.go
+    └─ app
+       ├─ display ── keyboard
+       ├─ render
+       └─ platform ── keyboard
+~~~
 
-- 配置界面、可选风格、鼠标可视化、多显示器跟随（属 v2.0）。
-- 代码签名。
-- 把 `launch.bat` 的环境约束去掉（那是 DSH 沙箱行为，与本设计无关）。
+| 模块 | 职责 | 当前入口或后续文件 |
+|---|---|---|
+| `keyboard` | 物理键名、左右修饰键、完整组合、500ms 连按 | `state.go` |
+| `display` | 三组 FIFO、稳定输入/组身份、组内追加及整体续期、暂停、快捷键过滤 | `controller.go`、`queue.go`、`animation.go` |
+| `render` | 字体加载、分组键帽布局、完整键帽快照与预乘 alpha 合成 | `theme.go`、`text.go`、`surface.go`、`bar.go`、`layout.go`、`frame.go` |
+| `platform` | 消息循环、键盘钩子、热键、分层窗口、显示器几何 | 现有 `*_windows.go` |
+| `platform` | 内存托盘图标、菜单、状态通知 | `tray_windows.go` |
+| `app` | 装配、资源生命周期、输入/控制调度、提示、固定左侧/底部锚点的纵向移动和快照缓存 | `app.go`、`session.go`、`options.go`、`scene.go` |
+| `app` 配置 | YAML路径/读写/校验、默认值、设置草稿与运行时应用 | `config.go`、`settings.go` |
+| `platform` 设置 | 原生设置窗口、控件、键盘导航、滚动、DPI重排和资源清理；安全文件替换与区域定位 | `settings_windows.go`、`config_windows.go`、`region.go` |
 
----
+`render` 不依赖其他内部模块，产出 `*image.RGBA`；`platform` 仅接收位图、坐标及通用设置描述，不依赖应用配置或主题。直接依赖 `golang.org/x/image`、`golang.org/x/sys`、`go.yaml.in/yaml/v3`；`golang.org/x/text` 为间接依赖。普通构建关闭 CGO，竞态测试另行启用。
 
-## 2. 为什么弃用 Fyne
+## 3. 线程、事件与时钟
 
-Fyne 当初是作为 walk 的替代品引入的，理由是「API 简洁、内置透明与动画」。其中**「内置透明」对叠加层这个场景不成立**：Fyne v2.8.1 没有任何整窗透明 API，而整窗半透明与淡入淡出只能靠 `WS_EX_LAYERED`，该样式会让 GLFW 的 OpenGL 交换不被合成——实测窗口自报 `IsWindowVisible=True`、所有 Win32 调用成功，屏幕上一个像素都不画。
+主 goroutine 锁定 OS 线程，创建不可见的顶层消息窗口和分层字幕窗口，然后运行 `GetMessage/TranslateMessage/DispatchMessage`。消息窗口不用 message-only 类型，以接收显示器广播。
 
-Fyne 现在只承担托盘图标与窗口管理两件事，而这两件的 Win32 管道本项目已经写好（消息循环、钩子、热键、显示器几何、DPI）。它留下的成本是：
+| 来源 | 工作线程职责 | UI 线程职责 |
+|---|---|---|
+| 键盘钩子 | 固定 OS 线程、消息泵、非阻塞投递输入 | 按原始事件时间更新状态和队列 |
+| 全局热键 | 注册/注销、消息泵、投递控制通知 | 切换暂停、清空显示、更新托盘 |
+| 托盘菜单 | 窗口消息，无额外状态线程 | 暂停/继续、关于、退出 |
+| 显示器变化 | 接收 `WM_DISPLAYCHANGE/WM_DPICHANGED/WM_SETTINGCHANGE` | 重新获取工作区、DPI、尺寸与位置 |
+| 动画时钟 | Go `time.Ticker` 每 16ms 投递合并的帧消息 | 到期、动画与必要重绘 |
 
-| 成本 | 量化 |
+每次成功投递输入或控制通知后调用 `Loop.Wake()`，通过 `PostMessage` 唤醒 UI。初始化期间输入先缓冲，UI 就绪后主动排空；不能依赖启动提示碰巧启动定时器。控制通知优先处理，暂停后立即丢弃待显示输入。
+
+当前事件携带键码、按下状态与采集时间，连按和到期按采集时间计算，避免 UI 批量排空时将多个输入判成同时发生。缓冲队列满时钩子仍非阻塞，并计数、唤醒 UI；UI 检测后重置状态，屏蔽仍按住的物理键，丢弃重置之前排队的事件。钩子停止使用独立事件句柄，不依赖消息队列还有空位。
+
+只有动画或队列到期需要推进时保持时钟；无队列、无提示、无退场快照则停表并隐藏。时钟协程仅投递消息，不操作显示状态；帧消息合并且带时钟代次，停表后的旧消息不能重启时钟，退出前等待投递协程结束。当前 Go 运行时在支持的 Windows 上使用高精度计时，替代实测抖动较大的 `WM_TIMER`。完整键帽快照仅在文本、计数、尺寸、字号、DPI 或主题变化时重建；保持阶段复用帧，动画仅合成已有快照。同尺寸画布复用并逐帧清空，避免遗留已移除键帽。显示器/工作区变化重新定位，时钟消息投递失败返回可诊断错误。
+
+## 4. 原生窗口与位图契约
+
+字幕窗口创建样式：
+
+~~~text
+WS_POPUP
+WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE |
+WS_EX_TRANSPARENT | WS_EX_TOPMOST
+~~~
+
+使用 top-down 32 位 DIB；Go 位图为预乘 RGBA，提交前逐行转换为预乘 BGRA。`BLENDFUNCTION` 使用 `AC_SRC_OVER`、`AC_SRC_ALPHA` 和常量 alpha 255。颜色 alpha 只预乘一次。
+
+`LayeredWindow.Apply(img, x, y)` 同时提交内容、尺寸与坐标，首次显示不激活窗口；`Apply(nil, 0, 0)` 隐藏。位图尺寸改变时替换 DIB，释放旧对象前从 DC 中换回原对象。检查 `UpdateLayeredWindow` 与关键 GDI API 返回值；失败时不把内部状态标记为成功，不继续展示过期字幕。
+
+调用方必须在 UI 线程创建、操作和销毁窗口。`Destroy` 释放 DIB、内存 DC、屏幕 DC 与 HWND。错误路径也执行清理，不用会跳过 defer 的进程终止方式处理普通初始化失败。
+
+现有 `OverlayPosition` 根据当前HWND尺寸和所在显示器计算底中位置，仅供测试和诊断。产品主路径首次提交前通过 `PrimaryWorkArea` 取得主屏工作区，用 `RegionPosition` 按配置锚定固定区域，再将实际位图放到区域底部，避免先在 `(0,0)` 闪现或随组数改变整体位置。
+
+## 5. 视觉、字体与 DPI
+
+| 项目 | 默认值 |
 |---|---|
-| 体积 | 23.3 MB，而自绘约 4 MB，直接违背「轻量」 |
-| 用户目录写入 | 违反「绿色」，规格里为此写了妥协条款 |
-| 无法实现 v1.0 视觉 | 「美观」卡死 |
+| 字体颜色 | 白色 |
+| 键帽背景 | 直通 alpha 约 `rgba(20,24,31,0.88)` |
+| 字号 | 18 逻辑像素 |
+| 内边距 | 左右 14，上下 10 逻辑像素 |
+| 圆角 | 8 逻辑像素 |
+| 描边与阴影 | 1px 描边、向下偏移 2px 阴影，均按 DPI 缩放 |
+| 间距 | 元素之间 8、行间 16 逻辑像素；空隙透明，无分隔符 |
+| 最小宽度 | 单键 44 逻辑像素 |
+| 行宽 | 默认420逻辑像素，可配置，受工作区宽度和边距限制 |
+| 行容量 | 默认最多八个完整输入，可配置；组合键占一个元素 |
+| 位置 | 默认左下，距左、底各24逻辑像素；九宫格位置及偏移可配置，行内左对齐 |
 
-**结论**：收益只剩省编码功夫，成本却压在三条核心要求上，故移除。
+工作区很窄时先减边距，以 200 逻辑像素作为可读宽度目标；单键 44px 最小宽度不用于整行限宽。UI 先取得工作区，再将无裁剪的 `Layout` 测量函数注入 `Queue.Fits`，追加后放不下就另起一组，不删当前行前缀。显示层不依赖渲染模块；`MaxElements=8` 同时限定组内数量。单个组合仍超宽时缩小至 12 逻辑像素，再降为 Unicode 省略摘要；工作区突然缩窄时已有行暂保留最新完整输入，后续按新宽度换行。省略不修改输入文本。静态 `Bar`/`Fit` 保留供诊断和 API 测试。
 
----
+启动时在创建 HWND 前声明 DPI 感知。坐标、工作区、位图尺寸都使用同一物理像素空间，缩放为 `dpi/96`。字号在 `FaceOptions.Size` 中按逻辑像素换算为点（乘 `72/96`），`DPI=96*scale`，不要同时给字号和 DPI 再乘 scale。
 
-## 3. 保留 / 替换 / 删除
+字体按 `Deng.ttf`、`msyh.ttc`、`simhei.ttf`、`simsun.ttc` 尝试解析，集合取首字体。全部失败时使用内嵌 Go Regular 轮廓字体，保持同样的字号与 DPI 规则；缺少中文提示字形时选用英文提示，方向键缺字时使用英文键名。缓存保留一个解析字体和最近 16 个字号/DPI face，避免键名与小计数交替时反复解析，也限制长时间使用的增长。缓存锁覆盖完整测量、绘制与关闭过程，退出释放全部 face。
 
-| 模块 | 处置 | 说明 |
-|---|---|---|
-| `internal/keyboard` | **保留** | 输入状态机，纯逻辑，已覆盖单测 |
-| `internal/display` | **保留** | FIFO 队列与暂停状态，纯逻辑，已覆盖单测 |
-| `internal/platform` 的钩子、热键、完整性检测 | **保留** | `keyboard_windows.go`、`hotkey_windows.go`、`token_windows.go` 不动 |
-| `internal/platform/overlay_windows.go` | **重写** | 改为分层窗口原语，样式设置与定位逻辑复用 |
-| `internal/platform` 新增 | **新增** | 消息窗口、托盘、定时器 |
-| `internal/ui` | **删除** | 整体由 `internal/app` + `internal/render` 取代 |
-| Fyne 依赖 | **删除** | 最后一步 `go mod tidy` |
+当前已接入 DPI 感知与工作区定位，字号重复缩放已修复；100%、125%、150%、200% 自动测量验证近似线性缩放，系统字体缺失时也验证相同规则。实际显示器的清晰度与位置仍须真实桌面确认。
 
----
+## 6. 纵向分组与动画时间口径
 
-## 4. 目标架构
+`Entry.ID` 标识一次完整输入，`GroupID` 标识所在行。默认连续输入追加至当前行，停顿达到700ms、元素达到上限或行宽不足时另起一组，最多三组、旧上新下。分组停顿不参与组合键识别，容量淘汰整行，退场也占组数。队列与Animator共用不再修改的 `display.Options`；无配置时沿用默认值，配置时同步组数、元素数、停顿、停留和动画开关。
 
-```
-cmd/keyvivi/main.go                程序入口，只调用 app.Run()
+新键帽沿用完整动画时间：
 
-internal/keyboard/                 输入状态机（不变）
-  state.go
+~~~text
+输入到达 ── 淡入 100ms ── 完整停留 1500ms ── 淡出 300ms ── 隐藏
+~~~
 
-internal/display/                  显示状态（不变）
-  queue.go       FIFO 队列，各项独立到期
-  controller.go  暂停、快捷键过滤、把事件转成待显示文本
+每次追加更新当前行所有输入的到期点，至少保留到最新键帽完成 100ms 淡入并停留 1500ms；已可见计数更新至少再停留 1500ms。快速合并不能缩短已获得的期限。整行到期后共同退场 300ms，其他行不续期；持续输入时早先键帽一直保留，避免前缀逐个消失。
 
-internal/render/                   纯 Go 位图渲染，无 Win32，可单测
-  theme.go       颜色、字号、内边距、圆角、间距
-  text.go        字体加载、按 DPI 缓存 face、测量与绘制
-  surface.go     RGBA 画布：圆角矩形、整体 alpha 混合
-  bar.go         由队列内容生成字幕位图（对外唯一入口）
+500ms 连按状态仍由键盘模块传递实际次数。前两次在同一行追加两项，第三次只合并当前连按尾部两项，保留第一项身份及入场进度并移除第二项快照。宽度换行后用计数偏移重新累计当前行的展示次数，不跨行合并或改写上一行。动画快照在整组到期后保留到退场结束；新组入场不受旧组退场影响。
 
-internal/platform/                 Win32 原语
-  keyboard_windows.go   低级键盘钩子（不变）
-  hotkey_windows.go     全局热键（不变）
-  token_windows.go      完整性级别（不变）
-  window_windows.go     隐藏消息窗口 + UI 线程消息循环（新增）
-  layered_windows.go    分层叠加窗口：Apply 位图 / 定位 / 隐藏（重写自 overlay）
-  tray_windows.go       Shell_NotifyIcon + 弹出菜单（新增）
-  overlay_windows.go    显示器工作区与 DPI 查询（保留定位计算）
+`scene` 每行复用 `Layout` 与 `KeyImage`，按输入 ID 关联单个完整键帽快照，组合名称不拆分。画布行宽固定，键帽相对左侧排布；窗口不会因追加而变宽或重新居中。组切换以 120ms 插值纵坐标，坐标相对固定底部；画布高度变化不会改变屏幕坐标，连续抢占从当前值续接。同一行新追加键帽继承该行正在播放的纵向运动，横坐标不动画。`FrameInto` 复用透明画布并合成图片，保持帧不重绘。
 
-internal/app/                     装配层，不含 Fyne
-  app.go          装配与主循环
-  animation.go    淡入淡出状态机
-  options.go      KEYVIVI_* 环境开关
-```
+新组从已有组下方排开，再经底部裁剪边界滑入，批量新组不重叠，也不为入场扩展窗口到工作区之外。`splitCount` 只提取大于二的重复徽标，Ctrl+C、Ctrl+Num+ 和字面量 + 均保留完整名称；计数附在同一个键帽内。
 
-**依赖方向**（单向，无环）：
+暂停是立即清除行为：队列、启动提示、退场快照和动画均清空，直接隐藏，不等待 300ms。恢复重新建立输入状态，跨暂停仍按住的键须先释放。
 
-```
-cmd ─▶ app ─▶ display ─▶ keyboard
-        │        │
-        │        └────────▶ (无)
-        ├────▶ render      （纯计算，不 import 其它内部包）
-        └────▶ platform ─▶ keyboard
-```
+## 7. 托盘、快捷键与提示
 
-`render` 不 import `platform`，`platform` 不 import `render`：前者产出 `*image.RGBA`，后者只接收位图与坐标。
+原生托盘使用 `Shell_NotifyIconW`，图标通过 `CreateIconIndirect` 从内存生成，无临时文件。菜单使用 `CreatePopupMenu/TrackPopupMenu`，提供暂停/继续、设置、关于、退出，暂停图标与菜单文本同步变化。
 
----
+图标采用用户选定的黑白融合 KV 字标：运行态黑底白字，暂停态灰底深色字并带暂停标记。`render.TrayIcon` 按目标像素尺寸生成抗锯齿路径，平台通过调用方传入的位图工厂取得图像并创建句柄，保持平台与主题渲染解耦。掩码行宽按 WORD 对齐。
 
-## 5. 关键设计决策
+隐藏消息窗口处理托盘回调；注册并处理 `TaskbarCreated`，Explorer 重启后重新添加图标。菜单、图标句柄和托盘注册都由 UI 线程管理并释放。
 
-### 5.1 叠加层用分层窗口 + `UpdateLayeredWindow`
+`Ctrl+Alt+K` 使用现有 `StartPauseHotkey`，包含 `MOD_NOREPEAT`。注册失败提供明确状态提示，托盘仍能控制。快捷键通知和钩子事件存在先后差异，过滤不能依赖偶然投递顺序；控制按键及修饰键释放不得补显。
 
-**决策**：窗口样式 `WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOPMOST`，内容由我们自己提供的 32 位 ARGB 位图通过 `UpdateLayeredWindow` 一次性提交。
+托盘失败时状态写入启动提示并保留 `Ctrl+Alt+Q` 退出兜底，不因环境限制连续弹窗。若托盘与退出热键均不可用，应提供原生退出入口或清理后结束，不能留下无入口后台进程。普通提示与关于窗口不展示按键日志。
 
-**依据**：这是 Windows 上唯一能同时提供逐像素 alpha、点击穿透、不抢焦点的组合。`SetLayeredWindowAttributes` 只能整窗统一 alpha，不够；且不能和 GL 共用（本项目的原始问题）。
+## 8. 生命周期与错误处理
 
-**注意**：`UpdateLayeredWindow` 要求传入源 DC 与位图，尺寸/位置在同一次调用里生效，因此**改内容、改大小、改位置都走同一个入口**，不存在窗口与位图不同步的中间态。
-
-### 5.2 文字与图形全部用 Go 光栅化
-
-**决策**：用 `golang.org/x/image/font/opentype` 解析系统字体，`x/image/font` 的 `Drawer` 画字；圆角矩形自己画。
-
-**依据**：不引入 GDI+ 绑定，渲染成为纯函数 → 可单测、可离线比对像素。代价是新增一个直接依赖 `golang.org/x/image`（Fyne 移除后总体依赖反而变少）。
-
-**字体**：按顺序尝试 `%WINDIR%\Fonts\Deng.ttf`、`msyh.ttc`、`simhei.ttf`，第一个解析成功者生效；全部失败则退回内置的极简位图字形，保证不崩。
-
-### 5.3 单个 UI 线程拥有全部窗口与状态
-
-**决策**：主 goroutine `LockOSThread`，创建隐藏消息窗口与分层叠加窗口，跑 `MsgWaitForMultipleObjects` 消息循环。队列状态、动画状态、托盘状态全部只在该线程读写。
-
-**依据**：Win32 窗口有线程亲和性；上一版因跨协程更新而反复出问题（`fyne.Do`、channel 语义、`doShowAgain` 覆盖坐标）。单线程模型把这类问题从根上消除。
-
-键盘钩子仍在其自己的线程（系统要求），只向 UI 线程投递事件，不持有状态。
-
-### 5.4 单一时钟驱动动画与到期
-
-**决策**：需要刷新时启动 16ms 定时器（`SetTimer`），每个 tick 依次：排空钩子事件 → 过期队列项 → 推进动画 → 重绘。无事可做时关闭定时器并隐藏窗口。
-
-**依据**：避免"到期用 30ms ticker、动画另起 60fps"的双时钟竞争；也是唯一的 CPU 占用点，空闲时为 0。
-
-### 5.5 托盘用 `Shell_NotifyIcon`
-
-**决策**：`NIM_ADD/NIM_MODIFY/NIM_DELETE` + `CreatePopupMenu`/`TrackPopupMenu`，回调消息发到隐藏消息窗口。
-
-**依据**：Fyne 的 systray 在受限令牌下写临时图标文件失败——这条依赖被彻底去掉。图标数据用内存位图 `CreateIconIndirect` 生成，不落盘。
-
----
-
-## 6. 接口草案
-
-```go
-// internal/render
-type Theme struct {
-    TextColor color.RGBA // 默认 #FFFFFF
-    BarColor  color.RGBA // 默认 rgba(10,13,18,0.75)，按直通 alpha 书写
-    FontSize  float64    // 逻辑像素，默认 18
-    PaddingX  float64    // 左右内边距，默认 24
-    PaddingY  float64    // 上下内边距，默认 12
-    Radius    float64    // 圆角半径，默认 8
-    Separator string     // 队列项之间的分隔符，默认 "  |  "
-    MinWidth  float64    // 宽度下限，默认 200
-}
-
-// Bar 把要显示的内容渲染成一张带 alpha 的字幕位图，宽度按内容自适应。
-// scale 为 DPI 缩放（1.0 = 96dpi），alpha 用于淡入淡出。
-func Bar(items []string, th Theme, alpha, scale float64) (*image.RGBA, error)
-
-// Measure 只算尺寸不绘制，供窗口提前定位。
-func Measure(items []string, th Theme, scale float64) (width, height int, err error)
-
-// Fit 返回能在 maxWidth 内放下的队尾子集：超宽时从最旧的一项开始丢弃，
-// 因为最新输入最重要。宽度上限由调用方按工作区宽度给出。
-func Fit(items []string, th Theme, scale, maxWidth float64) []string
-
-var ErrNoItems error // 没有可显示内容
-
-
-// internal/platform
-type LayeredWindow struct{ /* … */ }
-
-// NewLayeredWindow 必须在 UI 线程调用。
-func NewLayeredWindow() (*LayeredWindow, error)
-
-// Apply 同时提交位图、位置与尺寸；传 nil 隐藏窗口。
-func (w *LayeredWindow) Apply(img *image.RGBA, x, y int) error
-func (w *LayeredWindow) Destroy()
-
-// Loop 在调用线程跑消息循环，并驱动 16ms 时钟。
-type Loop struct{ /* … */ }
-
-// Run 阻塞直到 Quit。tick 返回 true 表示仍需刷新，false 则关闭时钟。
-func Run(onReady func(), tick func(now time.Time) bool, onQuit func()) error
-
-
-// internal/app
-func Run() // 装配全部组件并进入 UI 循环
-```
-
----
-
-## 7. 渲染规范
-
-| 项 | 值 | 来源 |
-|---|---|---|
-| 背景色 | `rgba(10, 13, 18, 0.75)` | 规格 3.2 |
-| 文字色 | `#FFFFFF` | 规格 3.2 |
-| 字号 | 18 逻辑像素 | 规格 3.2 |
-| 圆角 | 8 逻辑像素 | 规格 3.2 |
-| 内边距 | 上下 12、左右 24 逻辑像素 | 规格 3.2 |
-| 队列项间隔 | 24 逻辑像素，中间用 `\|` 分隔 | 本项目约定 |
-| 宽度 | 按内容自适应，下限 200、上限为工作区宽度减两侧各 120 | 本设计 |
-| 高度 | 字号 + 上下内边距 | 本设计 |
-| 位置 | 主显示器工作区底部居中，距底 80 逻辑像素 | 规格 3.1 |
-
-**DPI**：所有「逻辑像素」乘以 `GetDpiForWindow/96` 后取整；文字用同样的 scale 请求 face，保证清晰。`WM_DPICHANGED` 或 `WM_DISPLAYCHANGE` 时重新测量与定位。
-
----
-
-## 8. 动画规范
-
-| 阶段 | 时长 | 说明 |
-|---|---|---|
-| 淡入 | 100ms | alpha 0 → 1 |
-| 停留 | 1500ms | alpha 1 |
-| 淡出 | 300ms | alpha 1 → 0 |
-
-- 新输入到达时：更新内容、alpha 立即置 1（或从当前值续上）、重新开始停留计时。
-- 队列为空且淡出结束时：`Apply(nil)` 隐藏窗口并停表。
-- 队列非空时窗口始终可见，alpha 只受淡入淡出影响。
-- 动画期间每 16ms 一帧；100ms ≈ 7 帧、300ms ≈ 19 帧，肉眼连续。
-
----
-
-## 9. 线程与消息模型
-
-| 线程 | 职责 | 约束 |
-|---|---|---|
-| 主 goroutine（`LockOSThread`） | 隐藏消息窗口、分层窗口、定时器、托盘、队列与动画状态 | 唯一读写窗口与状态的地方 |
-| 钩子线程（`LockOSThread`） | `WH_KEYBOARD_LL` + 自己的消息泵 | 只向 channel 投递事件，不碰窗口 |
-| 热键线程（复用 `hotkey_windows.go`） | `RegisterHotKey` + 消息泵 | 回调只投递通知 |
-
-**唤醒方式**：钩子/热键投递后 `SetEvent`，UI 线程在 `MsgWaitForMultipleObjects` 上等待该事件与窗口消息；被唤醒后排空 channel 并处理。
-
-**消息窗口承载**：托盘回调（`WM_APP+1`）、热键（若后续统一到该窗口）、`WM_DISPLAYCHANGE`、`WM_DPICHANGED`、`WM_TIMER`、退出消息。
-
----
-
-## 10. 生命周期
-
-1. **启动**：解析 `KEYVIVI_*` 开关 → 校验完整性级别并记日志 → 创建消息窗口与分层窗口 → 装钩子 → 注册热键 → 添加托盘图标 → 显示启动提示（默认 1.5 秒，`KEYVIVI_READY_HINT` 可调，0 关闭）。
-2. **空闲**：队列为空、提示已过、动画结束 → 隐藏窗口并停表，CPU 占用为 0。
-3. **退出**：托盘"退出"、`Ctrl+Alt+Q`（托盘不可用时的兜底）或窗口关闭 → 停表 → `Shell_NotifyIcon(NIM_DELETE)` → 卸载钩子与热键 → 销毁窗口 → 退出进程。**不写任何文件。**
-
----
-
-## 11. 迁移步骤
-
-每一步都必须可编译、可验证，坏了一步就回退这一步。
-
-| 步 | 内容 | 验证方式 |
-|---|---|---|
-| 1 | 新建 `internal/render`（theme/text/surface/bar）+ 单测 | `go test ./tests/unit`：尺寸随内容、圆角外透明、整体 alpha 线性、DPI 缩放、Fit 丢最旧、空输入报错 |
-| 2 | `internal/platform` 新增 `window_windows.go`（消息窗口 + `Run` 循环）与 `layered_windows.go` | 集成测试：窗口样式、`Apply` 返回成功、位置在底部居中 |
-| 3 | `internal/platform` 新增 `tray_windows.go` | 集成测试：图标可添加/更新/删除不报错；菜单项构造正确 |
-| 4 | 新建 `internal/app`（装配 + 动画 + 开关），`cmd/keyvivi/main.go` 切到 `app.Run()`；`internal/ui` 暂留但不再被引用 | 构建成功；`launch.bat` 启动后按键、托盘、暂停、动画全部人工确认 |
-| 5 | 删除 `internal/ui`；`go mod tidy` 移除 Fyne；更新文档与验收表 | exe 体积、无 AppData 写入、全量测试、规格条款回滚 |
-
-**回退点**：第 4 步之前旧路径完全不受影响；第 4 步若失败，把 `main.go` 切回 `ui.Run()` 即可。
-
----
-
-## 12. 验收映射
-
-| 用例 | 本设计如何满足 |
+| 阶段 | 行为 |
 |---|---|
-| M05-01 托盘菜单 | `tray_windows.go`，图标不落盘 |
-| M05-02 暂停 / Ctrl+Alt+K | `hotkey_windows.go` 复用，暂停清空队列 |
-| M05-04 无边框、置顶、穿透、不抢焦点 | 分层窗口样式（保留现有组合，去掉 `WS_EX_LAYERED` 的旧断言改为必需） |
-| M05-06 FIFO 队列 | `display` 不变，渲染改为按项自适应宽度 |
-| M10-01 缩放与不截断 | 全部尺寸走 DPI scale；宽度上限为工作区宽减 240 |
-| M10-02 淡入淡出 | 第 8 节动画状态机 |
-| M10-03 目标机运行 | 无 Fyne、无 CGO 之外的依赖；仍需 CGO 编译，但产物无外部依赖 |
-| M10-04 绿色与隐私 | 不写任何文件，规格中原「接受 Fyne 写入」条款回滚 |
+| 初始化 | DPI/完整性检测与开关 → exe目录YAML读写/校验 → 消息窗口/叠加窗口 → 钩子 → 热键 → 托盘 → 启动提示 |
+| 运行 | 唤醒排空通知 → 更新输入与队列 → 推进动画 → 必要时渲染和提交 |
+| 暂停 | 清空输入显示与动画、隐藏、更新托盘，保持控制入口 |
+| 退出 | 标记停止 → 禁止新投递 → 停表 → 删除托盘 → 停钩子/热键 → 销毁图标/窗口/DC → 主循环返回 |
+| 初始化失败 | 逆序释放已获得资源，返回错误；没有控制入口时不进入隐藏后台运行 |
 
-**规格需要同步修改**：`project_spec.md` 第 3.4 节的「接受框架写入并如实说明」决策作废，改回「不写程序目录之外的文件」；M10-06（Fyne 路径清理）随之删除。
+清理函数存活到整个应用生命周期结束，不能在 `onReady` 返回时执行。UI 消息循环退出前，在同一线程完成窗口/GDI 清理；后台投递线程先停止，避免向已销毁 HWND 投递。
 
----
+日志只记录生命周期、数量、错误、尺寸和完整性级别，不记录键码、组合名称或字幕文本；不打开日志文件。`launch.bat` 的 exe 复制行为属于开发启动器，不属于应用缓存。
 
-## 13. 风险与回退
+## 9. 开关与兼容策略
 
-| 风险 | 应对 |
+| 开关 | 目标行为 | 当前状态 |
+|---|---|---|
+| `KEYVIVI_DEBUG` | 平台诊断，不含按键内容 | 平台层已有 |
+| `KEYVIVI_READY_HINT` | 0–3600 秒，可用小数；0 关闭；非法值回退 1.5 秒 | 已实现并覆盖边界测试 |
+| `KEYVIVI_SELFTEST` | 显式注入 F24、提示钩子回调计数 | 已接入 UI 时钟，默认关闭 |
+
+诊断注入不能默认启用。没有必要的功能不增加环境开关。不承诺 Windows 7 或非 Windows 平台，目标机器需验证无开发工具也能运行。
+
+YAML配置与设置UI使用同一份带版本号的类型化模型，首版分为显示区域、外观与布局、行为与动画三个分组。默认保留3组、8元素、420px行宽等行为，位置按用户确认改为左下角；字段单位及默认值以规格第3.5节为准。使用纯Go的 `go.yaml.in/yaml/v3 v3.0.4`，类型化解码开启KnownFields，拒绝重复/未知字段、多文档、空值、别名及合并，文件上限64KiB。
+
+配置位置以主屏工作区内的九宫格为锚点，叠加逻辑像素水平/垂直偏移，再约束到有效工作区。区域宽度受配置上限及工作区限制，高度按字号、行间距和最多组数计算；区域锚点不随可见组数变化。现有场景仍按底部组织纵向队列，实际位图放在区域底部，避免顶部或居中预设因位图高度变化而整体跳动。首帧即提交正确位置，DPI或工作区变化时重算区域及位图；不增加单独高度字段，不提前引入M3.2的显示器选择或跟随。
+
+配置路径基于 `os.Executable` 的目录解析，开发副本因此读取 `%LOCALAPPDATA%\KeyVivi\keyvivi.yaml`。读入先补默认值，再检查版本、字段、类型和范围；错误保留原文件并使用安全设置。保存将新值合入独立YAML节点，保留原注释；同目录临时文件写入并Sync/Close后通过 `MoveFileEx(REPLACE_EXISTING|WRITE_THROUGH)` 替换，成功才更换文档和活动模型；失败清理临时文件并保留原文件。
+
+设置窗口使用原生控件和已有UI消息循环，独立持有HWND与草稿；所有控件、预览和应用操作均在UI线程完成。通常并排三组，窄窗口改为单列并滚动；消息泵通过 `IsDialogMessageW` 处理Tab、回车与Esc，DPI变化重建控件和字体并保留草稿。位置示意和键帽示例共用实际渲染器，使用独立scene，不写正式输入队列。保存成功才应用，取消只丢弃草稿。应用时重建主题、容量、时长及宽度回调，清除旧队列/动画并同步物理按键状态，不改变当前暂停状态；启动时暂停只影响下一次启动。子控件销毁后于WM_NCDESTROY释放字体和路由；退出清理当前设置窗口，不为每次打开累积清理闭包。手动编辑首版重启生效。
+
+## 10. 验证分层
+
+实施顺序与里程碑统一见 [项目规格第5–6节](project_spec.md#5-里程碑与验收)，本节仅说明各层验证职责。每次保留输入与队列回归，不以编译结果标记完成。
+
+| 层次 | 必须验证 |
 |---|---|
-| `UpdateLayeredWindow` 在个别机器上失败 | `Apply` 返回错误即记日志并降级为普通窗口显示（不透明但可用），不静默失败 |
-| 系统字体全部解析失败 | 退回内置位图字形，只求可读 |
-| 文字渲染在非整数 DPI 下偏糊 | 按 scale 请求 face（`FaceOptions.Size` 为逻辑字号、`DPI` 为 96*scale），并允许 `KEYVIVI_FONT_SCALE` 覆盖 |
-| 托盘在受限令牌下仍失败 | 保留现有兜底：静默注册 `Ctrl+Alt+Q`，只写日志 |
-| 迁移期间两套 UI 并存导致误改 | 第 4 步前不删除 `internal/ui`，但它必须保持不被引用；第 5 步一次性删除 |
+| 单元测试 | 输入状态、500ms 边界、暂停残留、FIFO 容量与到期、alpha、DPI 比例、超宽布局、动画时间与新输入抢占 |
+| Windows API 集成 | 钩子事件、热键占用/释放、分层样式、DIB 提交、位置、隐藏与清理 |
+| 真实桌面 | 可见性、半透明、焦点、穿透、托盘菜单/Explorer 重启、缩放、动画、可靠退出 |
+| 发布分发 | 无Go/C工具运行、仅允许配置落盘、隐私、10分钟稳定性、体积/CPU/内存实测 |
+
+代理桌面捕获存在隔离限制，不能以截图缺失否定实现；同样不能用 API 成功证明可见性。实际证据维护在 [项目规格第7节](project_spec.md#7-验证记录)。
