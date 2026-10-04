@@ -41,7 +41,6 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 	var owner uint32
 	var previews int
 	var ui *platform.Loop
-	var reopen func() error
 	var fieldHandle func(int) uintptr
 	phase := 0
 	started := time.Now()
@@ -100,7 +99,7 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 			h, _, _ := getItem.Call(parent, uintptr(id))
 			return h
 		}
-		reopen, fieldHandle = open, item
+		fieldHandle = item
 		edit := func(id int, text string) {
 			p := windows.StringToUTF16Ptr(text)
 			setText.Call(item(id), uintptr(unsafe.Pointer(p)))
@@ -124,6 +123,15 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 		ownerWindow, _, _ := dll.NewProc("GetWindow").Call(settings.Handle(), 4)
 		if style&0x40000 == 0 || style&0x80 != 0 || ownerWindow != 0 {
 			return fmt.Errorf("settings has no independent taskbar window: style=%#x owner=%#x", style, ownerWindow)
+		}
+		windowStyle, _, _ := dll.NewProc("GetWindowLongPtrW").Call(settings.Handle(), ^uintptr(15))
+		if windowStyle&0x200000 != 0 {
+			return fmt.Errorf("settings exposes a system scrollbar")
+		}
+		var pathClass [32]uint16
+		dll.NewProc("GetClassNameW").Call(item(4000), uintptr(unsafe.Pointer(&pathClass[0])), uintptr(len(pathClass)))
+		if windows.UTF16ToString(pathClass[:]) != "Static" || read(4000) != store.path || read(4001) != "打开配置文件" || item(4) != 0 || read(5) != "" {
+			return fmt.Errorf("config path is not a final content row with an open button")
 		}
 		count, _, _ := send.Call(item(100), 0x146, 0, 0)
 		if count != 6 || item(2000) != 0 {
@@ -185,9 +193,10 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 			return fmt.Errorf("defaults persisted before save")
 		}
 		click(1)
-		if settings.Handle() != 0 || active != defaultConfig() {
+		if settings.Handle() == 0 || active != defaultConfig() || read(5) != "设置已保存" {
 			return fmt.Errorf("defaults save failed")
 		}
+		click(2)
 		if err := open(); err != nil {
 			return err
 		}
@@ -216,11 +225,11 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 		}
 		store.replace = nil
 		click(1)
-		if settings.Handle() != 0 || active.Appearance.FontSize != 32 || active.Region.Position != "top_right" || active.Behavior.Animation || active.Appearance.SettingsTheme != "latte" || active.Appearance.BackgroundColor != "#112233" {
+		if settings.Handle() == 0 || active.Appearance.FontSize != 32 || active.Region.Position != "top_right" || active.Behavior.Animation || active.Appearance.SettingsTheme != "latte" || active.Appearance.BackgroundColor != "#112233" {
 			return fmt.Errorf("save retry failed")
 		}
-		if err := open(); err != nil {
-			return err
+		if saved, err := (&configStore{path: store.path}).load(); err != nil || saved != active {
+			return fmt.Errorf("save with open panel did not persist config: %v", err)
 		}
 		edit(104, "200")
 		if enabled, _, _ := isEnabled.Call(item(1)); enabled != 0 {
@@ -246,6 +255,10 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 		if active.Region.Position != "bottom_right" || active.Behavior.Animation || active.Appearance.SettingsTheme != "latte" {
 			return fmt.Errorf("DPI reflow lost position selection or toggle state")
 		}
+		if settings.Handle() == 0 {
+			return fmt.Errorf("DPI save closed settings")
+		}
+		click(2)
 		// 两种主题先各初始化一次，再比较六次交替重开，排除原生主题缓存的首次增长。
 		for cycle := 0; cycle < 8; cycle++ {
 			if err := open(); err != nil {
@@ -352,25 +365,28 @@ func TestNativeSettingsDraftSaveCancelDefaultsAndDPI(t *testing.T) {
 			}
 			return true
 		}
+		if phase == 0 && active.Appearance.FontSize == 26 && active.Region.Position == "bottom_center" {
+			if settings.Handle() == 0 {
+				ui.Fail(fmt.Errorf("Enter saved but closed settings"))
+				return false
+			}
+			// 保存后继续编辑再取消，不能回滚已保存值或写入新草稿。
+			p := windows.StringToUTF16Ptr("29")
+			setText.Call(fieldHandle(104), uintptr(unsafe.Pointer(p)))
+			phase = 1
+			post.Call(fieldHandle(104), 0x100, 27, 0)
+			return true
+		}
 		if settings.Handle() == 0 {
-			if phase == 0 {
-				if active.Appearance.FontSize != 26 || active.Region.Position != "bottom_center" {
-					ui.Fail(fmt.Errorf("Enter did not save draft"))
-					return false
-				}
-				if err := reopen(); err != nil {
-					ui.Fail(err)
-					return false
-				}
-				phase = 1
-				post.Call(fieldHandle(104), 0x100, 27, 0)
-				return true
+			if phase != 1 || active.Appearance.FontSize != 26 {
+				ui.Fail(fmt.Errorf("save/cancel did not retain saved config"))
+				return false
 			}
 			ui.Quit()
 			return false
 		}
 		if time.Since(started) > 15*time.Second {
-			ui.Fail(fmt.Errorf("Enter or Escape did not close settings"))
+			ui.Fail(fmt.Errorf("Enter did not save or Escape did not close settings"))
 			return false
 		}
 		return true
@@ -527,9 +543,26 @@ func checkSettingsScrollPaint(hwnd uintptr, item func(int) uintptr, theme string
 		}
 		return got, nil
 	}
+	u.NewProc("SetFocus").Call(item(100))
 	first, err := capture("settings-window-top")
 	if err != nil {
 		return err
+	}
+	// 聚焦后的收起项保持输入背景，不能留下原生选中矩形。
+	var choice [4]int32
+	getRect.Call(item(100), uintptr(unsafe.Pointer(&choice)))
+	u.NewProc("MapWindowPoints").Call(0, hwnd, uintptr(unsafe.Pointer(&choice)), 2)
+	x, y := int((choice[0]+choice[2])/2), int(choice[1]+4)
+	expected := [3]byte{68, 50, 49}
+	if theme == "latte" {
+		expected = [3]byte{239, 233, 230}
+	}
+	if x < 0 || x >= w || y < 0 || y >= h {
+		return fmt.Errorf("focused position dropdown is outside paint bounds")
+	}
+	offset := (y*w + x) * 4
+	if first[offset] != expected[0] || first[offset+1] != expected[1] || first[offset+2] != expected[2] {
+		return fmt.Errorf("collapsed focused dropdown kept selection highlight")
 	}
 	send.Call(hwnd, 0x115, 3, 0)
 	middle, err := capture("settings-window-middle")

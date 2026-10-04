@@ -23,8 +23,6 @@ var (
 	isDialogMessage     = user32.NewProc("IsDialogMessageW")
 	beginPaint          = user32.NewProc("BeginPaint")
 	endPaint            = user32.NewProc("EndPaint")
-	setScrollInfo       = user32.NewProc("SetScrollInfo")
-	getScrollInfo       = user32.NewProc("GetScrollInfo")
 	redrawWindow        = user32.NewProc("RedrawWindow")
 	fillRect            = user32.NewProc("FillRect")
 	drawText            = user32.NewProc("DrawTextW")
@@ -39,6 +37,12 @@ var (
 	loadCursor          = user32.NewProc("LoadCursorW")
 	createFont          = gdi32.NewProc("CreateFontW")
 	setDIBitsToDevice   = gdi32.NewProc("SetDIBitsToDevice")
+	shellExecute        = windows.NewLazyDLL("shell32.dll").NewProc("ShellExecuteW")
+)
+
+const (
+	settingsPathID     = 4000
+	settingsOpenPathID = 4001
 )
 
 // SettingField 定义原生设置控件，平台层不依赖应用配置模型。
@@ -73,12 +77,6 @@ type settingsLabel struct {
 	x, y, width, height int
 	heading             bool
 	muted               bool
-}
-type scrollInfo struct {
-	size, mask uint32
-	min, max   int32
-	page       uint32
-	pos, track int32
 }
 type paintInfo struct {
 	dc              uintptr
@@ -144,7 +142,7 @@ func NewSettings(loop *Loop, options SettingsOptions) (*Settings, error) {
 	}
 	s := &Settings{loop: loop, options: options, scale: scale, inputs: make(map[string]uintptr), toggles: make(map[string]bool), palette: mochaPalette}
 	s.customColors = settingsCustomColors()
-	const style = 0x00C00000 | 0x00080000 | 0x00020000 | 0x00200000 | 0x02000000 // 标题、关闭、最小化、滚动与子窗口裁剪。
+	const style = 0x00C00000 | 0x00080000 | 0x00020000 | 0x02000000 // 标题、关闭、最小化与子窗口裁剪；滚动由内容视口接管。
 	clientWidth := min(s.px(820), max(1, workWidth-s.px(32)))
 	clientHeight := min(s.px(780), max(1, workHeight-s.px(72)))
 	box := windowRect{right: int32(clientWidth), bottom: int32(clientHeight)}
@@ -281,22 +279,29 @@ func (s *Settings) build() error {
 		}
 		y += 24
 	}
+	// 配置路径属于设置内容的最后一项，使用只读文本并提供打开按钮。
+	s.labels = append(s.labels, settingsLabel{"配置文件", 36, y + 6, labelWidth, 24, false, false})
+	pathWidth := max(120, controlX+controlWidth-164)
+	if _, err := s.control("STATIC", s.options.Path, 0x8000, settingsPathID, 36, y+38, pathWidth, 32); err != nil {
+		return err
+	}
+	if _, err := s.control("BUTTON", "打开配置文件", 0xB|0x10000, settingsOpenPathID, controlX+controlWidth-116, y+8, 116, 32); err != nil {
+		return err
+	}
+	y += 72
 	s.virtualHeight = s.px(y)
-	if _, err := add("EDIT", s.options.Path, 0x10000|0x80|0x800, 4, 108, 4, logicalWidth-148, 24); err != nil {
-		return err
-	}
-	s.status, err = add("STATIC", "", 0, 5, 24, 36, logicalWidth-48, 38)
+	s.status, err = add("STATIC", "", 0, 5, 24, 4, logicalWidth-48, 28)
 	if err != nil {
 		return err
 	}
-	s.saveButton, err = add("BUTTON", "保存设置", 0xB|0x10000, 1, logicalWidth-236, 82, 108, 36)
+	s.saveButton, err = add("BUTTON", "保存设置", 0xB|0x10000, 1, logicalWidth-236, 40, 108, 36)
 	if err != nil {
 		return err
 	}
-	if _, err := add("BUTTON", "取消", 0xB|0x10000, 2, logicalWidth-116, 82, 92, 36); err != nil {
+	if _, err := add("BUTTON", "取消", 0xB|0x10000, 2, logicalWidth-116, 40, 92, 36); err != nil {
 		return err
 	}
-	if _, err := add("BUTTON", "恢复默认", 0xB|0x10000, 3, 24, 82, 108, 36); err != nil {
+	if _, err := add("BUTTON", "恢复默认", 0xB|0x10000, 3, 24, 40, 108, 36); err != nil {
 		return err
 	}
 	s.arrange()
@@ -308,7 +313,7 @@ func (s *Settings) arrange() {
 	var client windowRect
 	getClientRect.Call(s.hwnd, uintptr(unsafe.Pointer(&client)))
 	s.clientWidth, s.clientHeight = int(client.right), int(client.bottom)
-	s.footerTop = max(s.px(190), s.clientHeight-s.px(130))
+	s.footerTop = max(s.px(190), s.clientHeight-s.px(90))
 	s.previewX, s.previewY = 24, 50
 	s.previewWidth, s.previewHeight = max(1, int(float64(s.clientWidth)/s.scale)-48), 112
 	top := s.px(180)
@@ -392,7 +397,7 @@ func (s *Settings) updatePreview() {
 		valid = 0
 		s.preview = nil
 	} else {
-		settingsText(s.status, "预览使用示例按键；取消或关闭窗口会放弃未保存的修改。")
+		settingsText(s.status, "")
 		w, h := img.Bounds().Dx(), img.Bounds().Dy()
 		s.preview = make([]byte, w*h*4)
 		for y := 0; y < h; y++ {
@@ -409,8 +414,6 @@ func (s *Settings) updatePreview() {
 
 func (s *Settings) setScroll(position int) {
 	s.scroll = min(max(0, position), max(0, s.virtualHeight-s.viewportHeight))
-	info := scrollInfo{size: uint32(unsafe.Sizeof(scrollInfo{})), mask: 7, max: int32(s.virtualHeight - 1), page: uint32(s.viewportHeight), pos: int32(s.scroll)}
-	setScrollInfo.Call(s.hwnd, 1, uintptr(unsafe.Pointer(&info)), 1)
 	moveWindow.Call(s.content, 0, uintptr(-s.scroll), uintptr(s.clientWidth), uintptr(max(1, s.virtualHeight)), 0)
 	// 整块移动后一次擦底并重绘全部子控件，不能复用滚动前的背景像素。
 	redrawWindow.Call(s.viewport, 0, 0, 0x185)
@@ -544,7 +547,6 @@ func (s *Settings) paint(hwnd, dc uintptr) {
 			s.text(dc, label.text, label.x, label.y, label.width, label.height, label.heading, label.muted)
 			if label.heading {
 				settingsFill(dc, windowRect{left: int32(s.px(24)), top: int32(s.px(label.y + 34)), right: int32(s.clientWidth - s.px(24)), bottom: int32(s.px(label.y + 35))}, s.palette.border)
-				settingsFill(dc, windowRect{left: int32(s.px(24)), top: int32(s.px(label.y + 5)), right: int32(s.px(27)), bottom: int32(s.px(label.y + 22))}, s.palette.accent)
 			}
 		}
 		return
@@ -555,13 +557,7 @@ func (s *Settings) paint(hwnd, dc uintptr) {
 	w := int(float64(s.clientWidth) / s.scale)
 	s.text(dc, "实时预览", 24, 14, 120, 26, true, false)
 	s.text(dc, "位置示意与示例按键 · 保存后立即生效", 148, 18, w-172, 24, false, true)
-	s.text(dc, "配置文件", 24, int(float64(s.footerTop)/s.scale)+4, 72, 24, false, true)
 	settingsFill(dc, windowRect{left: 0, top: int32(s.footerTop - s.px(8)), right: int32(s.clientWidth), bottom: int32(s.footerTop - s.px(7))}, s.palette.border)
-	for _, c := range s.controls {
-		if c.edit && c.fixed {
-			s.rounded(dc, windowRect{left: int32(s.px(c.x - 12)), top: int32(s.footerTop + s.px(c.y-6)), right: int32(s.px(c.x + c.width + 12)), bottom: int32(s.footerTop + s.px(c.y+c.height+6))}, s.palette.input, s.palette.border, 8)
-		}
-	}
 	if len(s.preview) > 0 {
 		h := int(-s.previewInfo.header.height)
 		setDIBitsToDevice.Call(dc, uintptr(s.px(s.previewX)), uintptr(s.px(s.previewY)), uintptr(s.previewInfo.header.width), uintptr(h), 0, 0, 0, uintptr(h), uintptr(unsafe.Pointer(&s.preview[0])), uintptr(unsafe.Pointer(&s.previewInfo)), 0)
@@ -597,7 +593,7 @@ func settingsProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr 
 			return 1
 		case 0x133, 0x134, 0x135, 0x138:
 			background := s.palette.background
-			if message == 0x133 || lParam != s.status {
+			if message == 0x133 || message == 0x134 {
 				background = s.palette.input
 			}
 			setBkMode.Call(wParam, 2)
@@ -668,12 +664,18 @@ func settingsProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr 
 				if err := s.options.Save(s.values()); err != nil {
 					settingsText(s.status, "保存失败："+err.Error())
 				} else {
-					s.Destroy()
+					settingsText(s.status, "设置已保存")
 				}
 			case id == 2:
 				s.Destroy()
 			case id == 3:
 				s.fill(s.options.Defaults())
+			case id == settingsOpenPathID:
+				path := windows.StringToUTF16Ptr(s.options.Path)
+				verb := windows.StringToUTF16Ptr("open")
+				if result, _, _ := shellExecute.Call(s.hwnd, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(path)), 0, 0, 1); result <= 32 {
+					settingsText(s.status, "无法打开配置文件，请检查文件关联。")
+				}
 			case id >= 100 && id < 100+len(s.options.Fields):
 				if notification == 0 || notification == 1 || notification == 0x300 {
 					field := s.options.Fields[id-100]
@@ -737,10 +739,6 @@ func settingsProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr 
 				position -= s.viewportHeight
 			case 3:
 				position += s.viewportHeight
-			case 4, 5:
-				info := scrollInfo{size: uint32(unsafe.Sizeof(scrollInfo{})), mask: 16}
-				getScrollInfo.Call(s.hwnd, 1, uintptr(unsafe.Pointer(&info)))
-				position = int(info.track)
 			case 6:
 				position = 0
 			case 7:

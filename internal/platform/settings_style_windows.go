@@ -266,6 +266,11 @@ func (s *Settings) drawButton(item *settingsDrawItem) {
 }
 
 func (s *Settings) drawChoice(item *settingsDrawItem) {
+	// 收起项也会收到选中绘制消息，必须整框重绘，避免原生高亮覆盖圆角与箭头。
+	if item.state&0x1000 != 0 {
+		s.paintChoice(item.hwnd, item.dc)
+		return
+	}
 	fill, text := s.palette.input, s.palette.foreground
 	if item.state&1 != 0 {
 		fill, text = s.palette.accent, s.palette.background
