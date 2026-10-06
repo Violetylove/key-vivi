@@ -1,6 +1,6 @@
 # KeyVivi 项目规格
 
-更新日期：2026-10-05（Asia/Shanghai）。本文维护产品需求、里程碑、进度与验收；实现方式见[设计文档](architecture.md)。
+更新日期：2026-10-06（Asia/Shanghai）。本文维护产品需求、里程碑、进度与验收；实现方式见[设计文档](architecture.md)。
 
 ## 范围
 
@@ -86,3 +86,5 @@ Mocha/Latte 主题、六位置下拉和颜色色块提供实时草稿预览。�
 2026-10-05，M2.2 补充验证：直接 `go build` 无 CGO 构建成功；同一源码输出到普通临时目录时无 Low 标签，输出到当前工作区 `dist` 时继承 Low。格式、vet、竞态测试和真实 Low 子进程拒绝回归通过；发行工作流通过 actionlint，尚未触发云端发布。
 
 代理截图隔离原因仍未完全确认。排查方法见[窗口排查](issue-layered-window.md)。历史逐次构建与测量记录可从 Git 历史查阅。
+
+2026-10-06，M2.2 云端首次运行：`v0.1.0-alpha.1` 在格式检查失败，Windows 检出将 Go 文件转换为 CRLF，后续步骤未执行；添加 `.gitattributes` 固定 Go 文件为 LF 后，`core.autocrlf=true` 的新检出格式检查、vet 和竞态测试通过，云端复验待完成。

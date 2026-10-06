@@ -1,0 +1,2 @@
+# gofmt 输出 LF，Windows 检出也必须保留。
+*.go text eol=lf
