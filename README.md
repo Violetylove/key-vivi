@@ -12,9 +12,9 @@ Windows 按键可视化工具，适用于录屏、演示和教学。以半透明
 
 ## 使用
 
-目标平台为 Windows 10/11 x64。项目处于开发阶段，尚未发布发行版；开发状态见[项目规格](docs/project_spec.md#里程碑与进度)。
+目标平台为 Windows 10/11 x64。项目处于开发阶段，可从[发行页面](https://github.com/Violetylove/key-vivi/releases)下载预发行版；开发状态见[项目规格](docs/project_spec.md#里程碑与进度)。
 
-从源码构建后，直接运行 `dist\KeyVivi.exe`。程序在 exe 同目录生成 `keyvivi.yaml`，可通过托盘打开设置窗口调整；手动修改文件后需重启。
+下载后直接运行 `KeyVivi.exe`，源码构建产物位于 `dist`。程序在 exe 同目录生成 `keyvivi.yaml`，可通过托盘打开设置窗口调整；手动修改文件后需重启。
 
 暂停可停止后续按键展示，敏感输入前应主动暂停。
 
