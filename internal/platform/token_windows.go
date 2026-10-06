@@ -18,8 +18,8 @@ const (
 
 // IntegrityLevel 返回进程令牌的强制完整性级别 RID。
 //
-// 已确认工作区产物继承Low文件标签，普通桌面启动也会降权，影响托盘及全局输入。
-// 读取级别供装配前检查；修正属于构建流程，运行时不能自行提升令牌或改目录权限。
+// 产物继承Low文件标签时，普通桌面启动也会降权，影响托盘及全局输入。
+// 读取级别供装配前检查；运行时不能自行提升令牌或改目录权限。
 func IntegrityLevel() (uint32, error) {
 	token := windows.GetCurrentProcessToken()
 	var size uint32

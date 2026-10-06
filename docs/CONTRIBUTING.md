@@ -30,15 +30,18 @@
 ```powershell
 gofmt -w .
 go vet ./...
+$env:CGO_ENABLED = '1'
 go test -race ./...
-.\build.ps1
+$env:CGO_ENABLED = '0'
+go build -trimpath -ldflags='-s -w -H=windowsgui' -o dist/KeyVivi.exe ./cmd/keyvivi
 ```
 
-普通构建关闭 CGO，用户运行无需 Go 或 C 编译器；Windows 竞态检查需要启用 CGO 和可用的 C 编译器。构建脚本只将产物 exe 标为 Medium，不更改工作区安全设置。构建后直接运行 `dist\KeyVivi.exe`。
+构建关闭 CGO，用户运行无需 Go 或 C 编译器；Windows 竞态检查需要 `CGO_ENABLED=1` 和可用的 C 编译器。构建后直接运行 `dist\KeyVivi.exe`。本地目录带 Low 标签时，按[窗口排查](issue-layered-window.md#低完整性启动)处理；这不是源码或构建命令的要求。
 
 原生集成测试需要交互式桌面，会创建窗口、注册热键并注入 F24：
 
 ```powershell
+$env:CGO_ENABLED = '1'
 go test -race -tags integration ./internal/app ./tests/integration -count=1 -v -timeout=90s
 ```
 
@@ -51,6 +54,17 @@ go test -race -tags integration ./internal/app ./tests/integration -count=1 -v -
 | `KEYVIVI_MEASURE_CADENCE=1` | `go test -tags integration ./tests/integration -run '^TestLoopCadence$' -count=1 -v -timeout=15s` |
 
 预览写入 `tests/artifacts`。帧间隔测量不包含渲染与桌面合成；正式验收要求见[项目规格](project_spec.md#验收条件)。
+
+## 发行
+
+推送 `v*` 标签触发[发行工作流](../.github/workflows/release.yml)：Windows x64 上检查格式、执行 vet 和竞态测试，直接 `go build`，通过 `softprops/action-gh-release` 上传 `KeyVivi.exe` 并生成发行说明。含 `-` 的标签标为预发行版，例如 `v0.1.0-rc.1`。原生桌面验收仍按[规格](project_spec.md#验收条件)执行。
+
+确认发布条件后创建并推送标签，例如：
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
 
 ## 提交
 

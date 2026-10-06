@@ -22,7 +22,7 @@ func TestStartupIntegrityAndFailureMessage(t *testing.T) {
 			t.Fatal("restricted startup accepted", level, err)
 		}
 		message := FailureMessage(fmt.Errorf("startup: %w", err))
-		if !strings.Contains(message, "未启动") || !strings.Contains(message, "build.ps1") || strings.Contains(err.Error(), "托盘") {
+		if !strings.Contains(message, "未启动") || !strings.Contains(message, "普通桌面") || strings.Contains(err.Error(), "托盘") {
 			t.Fatal("startup guidance or English diagnostic missing", message, err)
 		}
 	}

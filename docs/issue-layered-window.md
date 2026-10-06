@@ -21,7 +21,17 @@
 4. 从普通桌面直接运行 exe，人工确认可见性、透明度、穿透与焦点。
 5. 在规格中记录通过、失败、环境受限或未测试，附步骤和证据。
 
-Low 令牌错误按[构建流程](CONTRIBUTING.md#构建与测试)修正产物标签，不提权、不修改工作区目录。Windows 规则见[强制完整性控制](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control)。
+## 低完整性启动
+
+Git 不传输 Windows 完整性标签。从远端克隆到普通目录后，标准构建无需调整权限；如果克隆或输出目录本身带 Low 标签，新 exe 仍可能继承 Low。
+
+使用 `icacls .`、`icacls .\dist` 和 `icacls .\dist\KeyVivi.exe` 检查文件标签。若只有本地受限工作区造成问题，可将输出路径改为普通用户目录；需要保留原路径时，只修正已确认的单个产物：
+
+```powershell
+icacls .\dist\KeyVivi.exe /setintegritylevel M
+```
+
+标签修正不提高当前进程权限，仍需从普通桌面重新启动。不要调整工作区目录安全设置或通过管理员运行绕过检查。Windows 规则见[强制完整性控制](https://learn.microsoft.com/en-us/windows/win32/secauthz/mandatory-integrity-control)。
 
 ## 验证入口
 

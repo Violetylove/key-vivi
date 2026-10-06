@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-2025
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: |
+          $unformatted = @(gofmt -l .)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($unformatted.Count -gt 0) {
+            $unformatted | Write-Output
+            throw 'Go files must be formatted.'
+          }
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test with race detector
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race ./...
+
+      - name: Build Windows x64 executable
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -trimpath -ldflags='-s -w -H=windowsgui' -o dist/KeyVivi.exe ./cmd/keyvivi
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3.0.3
+        with:
+          files: dist/KeyVivi.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
