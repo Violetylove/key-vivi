@@ -21,7 +21,6 @@ var unhook = user32.NewProc("UnhookWindowsHookEx")
 var getMessage = user32.NewProc("GetMessageW")
 var peekMessage = user32.NewProc("PeekMessageW")
 var postThreadMessage = user32.NewProc("PostThreadMessageW")
-var keybdEvent = user32.NewProc("keybd_event")
 var getAsyncKeyState = user32.NewProc("GetAsyncKeyState")
 
 // HeldKeys 返回当前物理按下的键，供暂停和丢事件恢复时阻止残留输入。
@@ -38,25 +37,10 @@ func HeldKeys() []uint32 {
 	return held
 }
 
-// hookEvents 是供 KEYVIVI_DEBUG 计数的回调次数。
-var hookEvents atomic.Uint64
 var hookDropped atomic.Uint64
-
-// HookEventCount 返回钩子回调见过的事件总数；只给数量，不给按了哪些键。
-func HookEventCount() uint64 { return hookEvents.Load() }
 
 // HookDroppedCount 返回缓冲溢出的累计次数，不记录键码或文本。
 func HookDroppedCount() uint64 { return hookDropped.Load() }
-
-// SendKey 注入一次按键的按下与抬起。仅用于诊断：同进程注入在桌面不投递任何
-// 输入时仍能到达钩子。
-func SendKey(vk uint32) {
-	keybdEvent.Call(uintptr(vk), 0, 0, 0)
-	keybdEvent.Call(uintptr(vk), 0, 2, 0)
-}
-
-// SendTestKey 注入 F24；它没有显示名，自检不会表现为一次按键。
-func SendTestKey() { SendKey(0x87) }
 
 // traceHook 在 KEYVIVI_DEBUG 设置时输出钩子生命周期；只记句柄与消息循环结果。
 func traceHook(format string, args ...any) {
@@ -108,7 +92,6 @@ func StartKeyboardHookWithWake(events chan<- keyboard.Event, wake func()) (func(
 		peekMessage.Call(uintptr(unsafe.Pointer(&msg)), 0, 0, 0, 0)
 		// Go 回调支持指针参数，直接接收系统指针，避免 uintptr 往返破坏指针检查。
 		callback := syscall.NewCallback(func(code int32, wParam uintptr, lParam unsafe.Pointer) uintptr {
-			hookEvents.Add(1)
 			if code >= 0 && (wParam == 0x100 || wParam == 0x104 || wParam == 0x101 || wParam == 0x105) {
 				data := (*keyboardData)(lParam)
 				select {

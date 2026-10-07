@@ -4,16 +4,7 @@
 
 文档职责见[协作规则](../AGENTS.md#文档职责)。修改需求或实现时同步对应文档，避免重复维护。
 
-| 路径 | 用途 |
-|---|---|
-| `cmd/keyvivi` | 程序入口 |
-| `internal/{app,keyboard,display,render,platform}` | 实现代码 |
-| `tests/unit`、`tests/integration` | 单元和原生集成测试 |
-| `tests/artifacts` | 本地验证证据，Git 忽略 |
-| `docs` | 项目文档 |
-| `dist` | 构建产物，Git 忽略 |
-
-未导出实现允许使用同包 `*_test.go`，文件头说明原因。根目录不放源码、测试或 exe。
+目录与测试入口见[仓库导航](../REPO_MAP.md)。生产源码与测试分离，根目录不放源码、测试或 exe。
 
 ## 编码
 
@@ -37,49 +28,36 @@ $env:CGO_ENABLED = '0'
 go build -trimpath -ldflags='-s -w -H=windowsgui' -o dist/KeyVivi.exe ./cmd/keyvivi
 ```
 
-构建关闭 CGO，用户运行无需 Go 或 C 编译器；Windows 竞态检查需要 `CGO_ENABLED=1` 和可用的 C 编译器。构建后直接运行 `dist\KeyVivi.exe`。本地目录带 Low 标签时，按[窗口排查](issue-layered-window.md#低完整性启动)处理；这不是源码或构建命令的要求。
+构建关闭 CGO，用户运行无需 Go 或 C 编译器；Windows 竞态检查需要 `CGO_ENABLED=1` 和可用的 C 编译器。构建后直接运行 `dist\KeyVivi.exe`。
 
 原生集成测试需要交互式桌面，会创建窗口、注册热键并注入 F24：
 
 ```powershell
 $env:CGO_ENABLED = '1'
-go test -race -tags integration ./internal/app ./tests/integration -count=1 -v -timeout=90s
+go test -race -tags integration ./tests/integration -count=1 -v -timeout=120s
 ```
 
-可选验证通过环境变量显式启用：
+普通 `go test ./...` 也会运行 `tests/unit/testdata` 中的应用和字体回归；入口通过 Go overlay 加入原包，显式执行 vet，并继承外层的 `-race`。原生设置回归同样由 `tests/integration` 的入口运行。不要把同包测试移回生产目录。
 
-| 环境变量 | 验证命令 |
-|---|---|
-| `KEYVIVI_SETTINGS_PREVIEW=1` | `go test -race -tags integration ./internal/app -run 'TestNativeSettingsDraftSaveCancelDefaultsAndDPI' -count=1` |
-| `KEYVIVI_ANIMATION_PREVIEW=1` | `go test ./internal/app -run 'Preview$' -count=1` |
-| `KEYVIVI_MEASURE_CADENCE=1` | `go test -tags integration ./tests/integration -run '^TestLoopCadence$' -count=1 -v -timeout=15s` |
-
-预览写入 `tests/artifacts`。帧间隔测量不包含渲染与桌面合成；本轮收尾范围见[项目规格](project_spec.md#验收条件)。
-
-实际 exe 的进程外验收需先构建，并从普通用户交互式桌面执行；受限代理桌面不能替代该环境。测试复制 exe 到独立临时目录，不改用户配置：
+实际 exe 回归可选，需要先构建，再从普通用户交互式桌面执行。测试复制 exe 到独立临时目录，不改用户配置：
 
 ```powershell
 $env:KEYVIVI_EXE = (Resolve-Path dist/KeyVivi.exe).Path
-$env:KEYVIVI_ARTIFACT_DIR = Join-Path (Get-Location) 'tests/artifacts/executable'
-go test -race -tags integration ./tests/integration -run '^TestExecutable(Lifecycle|OccupiedPauseHotkey|TaskbarCreatedRecovery)$' -count=1 -v -timeout=30s
-$env:KEYVIVI_MEASURE_STABILITY = '1'
-go test -race -tags integration ./tests/integration -run '^TestExecutableStability$' -count=1 -v -timeout=25m
-Remove-Item Env:KEYVIVI_EXE, Env:KEYVIVI_ARTIFACT_DIR, Env:KEYVIVI_MEASURE_STABILITY
+go test -race -tags integration ./tests/integration -run '^TestExecutable' -count=1 -v -timeout=30s
+Remove-Item Env:KEYVIVI_EXE
 ```
 
-稳定性默认空闲和快速输入各 600 秒，每 10 秒记录 CPU 时间、工作集、私有内存及进程/GDI/USER 句柄到 `stability.jsonl`，并检查 UI 响应。CPU 百分比按逻辑处理器数归一化；资源样本需审阅趋势，不以测试返回成功代替无增长结论。空闲期间检测到按键时不得记为纯空闲通过。快速输入为每秒约 30 次，仅向同时拥有前台与键盘焦点的专用测试窗口注入，修饰键按住或焦点移出时停止；自动取得焦点失败时等待人工点击最多 60 秒，输入量不足会失败。接收计数覆盖普通及系统按键消息，另记录系统按键与输入法消息数量，以辅助定位差异，不记录按键内容。
-
-可用 `KEYVIVI_STABILITY_PHASE=idle` 或 `rapid` 单独测量一段；`KEYVIVI_STABILITY_SECONDS`（5–3600）用于调试测量工具，短测不能记为完成 10 分钟测量。用完后清除这些环境变量。这些工具可选，不增加本轮强制验收项目。生命周期测试覆盖消息循环正常退出、窗口/托盘移除及热键释放；托盘恢复测试模拟条目丢失和 `TaskbarCreated` 通知，不等同于真实 Explorer 重启或人工点击退出。
+覆盖正常退出和热键释放、热键占用时的托盘路径，以及模拟 `TaskbarCreated` 恢复。模拟通知不等同于真实 Explorer 重启。测试默认输出到临时目录；需要保留进程诊断时设置 `KEYVIVI_ARTIFACT_DIR`。一次性预览、像素探针与长时间采样工具已移除，历史结果保存在本地证据或 Git 历史中。
 
 ## 发行
 
-推送 `v*` 标签触发[发行工作流](../.github/workflows/release.yml)：Windows x64 上检查格式、执行 vet 和竞态测试，直接 `go build`，通过 `softprops/action-gh-release` 上传 `KeyVivi.exe` 并生成发行说明。含 `-` 的标签标为预发行版，例如 `v0.1.0-rc.1`；预发行版不进入 GitHub 的正式版 `latest` 查询。发布前收尾检查见[规格](project_spec.md#验收条件)。
+推送 `v*` 标签触发[发行工作流](../.github/workflows/release.yml)：Windows x64 上检查格式、执行 vet 和竞态测试，直接 `go build`，通过 `softprops/action-gh-release` 上传 `KeyVivi.exe` 并生成发行说明。含 `-` 的标签标为预发行版，例如 `v1.0.0-rc.1`；预发行版不进入 GitHub 的正式版 `latest` 查询。发布前收尾检查见[规格](project_spec.md#验收条件)。
 
-确认发布条件后创建并推送标签，例如：
+完成检查、提交并审阅暂存差异后创建标签，推送提交与标签，例如：
 
 ```powershell
-git tag v0.1.0
-git push origin v0.1.0
+git tag v1.0.0
+git push origin main v1.0.0
 ```
 
 ## 提交

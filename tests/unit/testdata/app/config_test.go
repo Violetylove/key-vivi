@@ -3,7 +3,6 @@ package app
 // 配置模型与保存事务未导出，同包测试覆盖文件、草稿和输入状态的装配边界。
 import (
 	"errors"
-	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -340,36 +339,5 @@ func TestConfiguredSceneCapacitySurvivesIdleAndAnimationSwitch(t *testing.T) {
 	img, _, err = picture.draw([]display.Visual{{ID: 99, Text: "A", Alpha: 1}}, c.theme(), 1, 1600, now.Add(6*time.Second))
 	if err != nil || img.Bounds().Dx() != 600 || picture.options.GroupLimit() != 6 {
 		t.Fatal("idle reset discarded configuration", err)
-	}
-}
-
-func TestSettingsPreview(t *testing.T) {
-	if os.Getenv("KEYVIVI_SETTINGS_PREVIEW") == "" {
-		t.Skip("set KEYVIVI_SETTINGS_PREVIEW=1 to export settings sample preview")
-	}
-	for _, scale := range []float64{1, 1.25, 1.5, 2} {
-		c := defaultConfig()
-		img, err := configPreview(c, scale, int(810*scale), int(190*scale), 1920, 1040)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if img.Bounds().Dx() != int(810*scale) {
-			t.Fatal("preview DPI size incorrect")
-		}
-		if scale == 1 {
-			path := filepath.Join("..", "..", "tests", "artifacts", "settings-sample-preview.png")
-			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-				t.Fatal(err)
-			}
-			f, err := os.Create(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = png.Encode(f, img)
-			closeErr := f.Close()
-			if err != nil || closeErr != nil {
-				t.Fatal(err, closeErr)
-			}
-		}
 	}
 }

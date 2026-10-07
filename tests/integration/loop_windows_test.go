@@ -7,44 +7,9 @@ import (
 	"golang.org/x/sys/windows"
 	"key-vivi/internal/platform"
 	"key-vivi/internal/render"
-	"os"
-	"slices"
 	"testing"
 	"time"
 )
-
-// TestLoopCadence 显式测量消息循环节奏；调度受机器负载影响，不设易抖动的帧率断言。
-func TestLoopCadence(t *testing.T) {
-	if os.Getenv("KEYVIVI_MEASURE_CADENCE") == "" {
-		t.Skip("set KEYVIVI_MEASURE_CADENCE=1 to measure UI tick intervals")
-	}
-	var loop *platform.Loop
-	var previous time.Time
-	var intervals []time.Duration
-	err := platform.Run(func(l *platform.Loop) error {
-		loop = l
-		return l.Wake()
-	}, func(now time.Time) bool {
-		if !previous.IsZero() {
-			intervals = append(intervals, now.Sub(previous))
-		}
-		previous = now
-		if len(intervals) == 120 {
-			loop.Quit()
-			return false
-		}
-		return true
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var total time.Duration
-	for _, interval := range intervals {
-		total += interval
-	}
-	slices.Sort(intervals)
-	t.Logf("samples=%d mean=%s p50=%s p95=%s max=%s", len(intervals), total/time.Duration(len(intervals)), intervals[60], intervals[114], intervals[119])
-}
 
 func TestLoopWakesAfterIdleAndCleansOnOwnerThread(t *testing.T) {
 	for cycle := 0; cycle < 2; cycle++ {

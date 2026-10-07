@@ -14,17 +14,6 @@ import (
 
 // Run 装配自绘窗口、输入与托盘，退出和错误均先完成资源清理。
 func Run() error {
-	level, levelErr := platform.IntegrityLevel()
-	if levelErr != nil {
-		return fmt.Errorf("integrity check: %w", levelErr)
-	}
-	// Low文件标签会让普通桌面启动也降权，必须在装配托盘和钩子之前明确失败。
-	if err := checkStartupIntegrity(level); err != nil {
-		return err
-	}
-	if os.Getenv("KEYVIVI_DEBUG") != "" {
-		log.Printf("integrity level=%#x", level)
-	}
 	if err := platform.EnableDPIAwareness(); err != nil {
 		log.Printf("DPI awareness: %v", err)
 	}
@@ -53,9 +42,6 @@ func Run() error {
 	var regionPixels int
 	var shown bool
 	lastDropped := platform.HookDroppedCount()
-	selftest := os.Getenv("KEYVIVI_SELFTEST") != ""
-	var testFire, testCheck time.Time
-	var testCount uint64
 
 	return platform.Run(func(ui *platform.Loop) error {
 		loop = ui
@@ -178,7 +164,7 @@ func Run() error {
 			Toggle:   toggle,
 			About: func() {
 				platform.ShowMessage(loop.Handle(), "关于 KeyVivi",
-					"KeyVivi 自绘开发版\nCtrl+Alt+K：暂停 / 继续\n不记录或上传按键内容")
+					"KeyVivi 1.0.0\nCtrl+Alt+K：暂停 / 继续\n不记录或上传按键内容")
 			},
 			Exit:  loop.Quit,
 			Error: trayError,
@@ -207,9 +193,6 @@ func Run() error {
 				return fmt.Errorf("pause and tray controls unavailable: %w", pauseErr)
 			}
 			state.showHint(render.HintText("Ctrl+Alt+K 注册失败，请使用托盘暂停", "Ctrl+Alt+K unavailable; pause from tray"), now, 6*time.Second)
-		}
-		if selftest {
-			testFire = now.Add(700 * time.Millisecond)
 		}
 		if configErr != nil {
 			platform.ShowMessage(loop.Handle(), "KeyVivi 配置提示", "已使用默认设置，原配置未自动覆盖。\n"+configErr.Error()+"\n配置路径："+path)
@@ -277,22 +260,6 @@ func Run() error {
 			}
 		}
 	inputsDone:
-		if selftest && !testFire.IsZero() && !now.Before(testFire) {
-			testCount = platform.HookEventCount()
-			platform.SendTestKey()
-			testFire = time.Time{}
-			testCheck = now.Add(500 * time.Millisecond)
-		}
-		if !testCheck.IsZero() && !now.Before(testCheck) {
-			after := platform.HookEventCount()
-			text := render.HintText("钩子自检失败，请检查运行环境", "Hook self-test failed; check environment")
-			if after > testCount {
-				text = render.HintText("钩子自检通过", "Hook self-test passed")
-			}
-			log.Printf("hook self-test before=%d after=%d", testCount, after)
-			state.showHint(text, now, 5*time.Second)
-			testCheck = time.Time{}
-		}
 		visuals := state.visuals(now)
 		if len(visuals) == 0 {
 			if shown {
@@ -302,7 +269,7 @@ func Run() error {
 				shown = false
 			}
 			picture.reset()
-			return !testFire.IsZero() || !testCheck.IsZero()
+			return false
 		}
 		img, changed, err := picture.draw(visuals, theme, workScale, maxWidth, now)
 		if err != nil {

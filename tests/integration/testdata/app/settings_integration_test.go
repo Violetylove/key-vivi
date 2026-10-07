@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"image/png"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -507,7 +506,7 @@ func checkSettingsScrollPaint(hwnd uintptr, item func(int) uintptr, theme string
 	previous, _, _ := g.NewProc("SelectObject").Call(dc, bitmap)
 	defer g.NewProc("SelectObject").Call(dc, previous)
 	pixels := unsafe.Slice((*byte)(bits), w*h*4)
-	capture := func(name string) ([]byte, error) {
+	capture := func() ([]byte, error) {
 		for i := range pixels {
 			pixels[i] = 0
 		}
@@ -527,32 +526,10 @@ func checkSettingsScrollPaint(hwnd uintptr, item func(int) uintptr, theme string
 		if got[0] != background[0] || got[1] != background[1] || got[2] != background[2] {
 			return nil, fmt.Errorf("settings background was not erased")
 		}
-		if os.Getenv("KEYVIVI_SETTINGS_PREVIEW") != "" {
-			img := image.NewRGBA(image.Rect(0, 0, w, h))
-			for i := 0; i < len(got); i += 4 {
-				img.Pix[i], img.Pix[i+1], img.Pix[i+2], img.Pix[i+3] = got[i+2], got[i+1], got[i], 255
-			}
-			path := filepath.Join("..", "..", "tests", "artifacts", name+"-"+theme+".png")
-			if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-				return nil, err
-			}
-			f, err := os.Create(path)
-			if err != nil {
-				return nil, err
-			}
-			err = png.Encode(f, img)
-			closeErr := f.Close()
-			if err != nil {
-				return nil, err
-			}
-			if closeErr != nil {
-				return nil, closeErr
-			}
-		}
 		return got, nil
 	}
 	u.NewProc("SetFocus").Call(item(100))
-	first, err := capture("settings-window-top")
+	first, err := capture()
 	if err != nil {
 		return err
 	}
@@ -573,7 +550,7 @@ func checkSettingsScrollPaint(hwnd uintptr, item func(int) uintptr, theme string
 		return fmt.Errorf("collapsed focused dropdown kept selection highlight")
 	}
 	send.Call(hwnd, 0x115, 3, 0)
-	middle, err := capture("settings-window-middle")
+	middle, err := capture()
 	if err != nil {
 		return err
 	}
@@ -581,7 +558,7 @@ func checkSettingsScrollPaint(hwnd uintptr, item func(int) uintptr, theme string
 		return fmt.Errorf("scroll did not change settings painting")
 	}
 	send.Call(hwnd, 0x115, 7, 0)
-	if _, err := capture("settings-window-bottom"); err != nil {
+	if _, err := capture(); err != nil {
 		return err
 	}
 	for cycle := 0; cycle < 6; cycle++ {
@@ -589,7 +566,7 @@ func checkSettingsScrollPaint(hwnd uintptr, item func(int) uintptr, theme string
 		send.Call(hwnd, 0x115, 7, 0)
 	}
 	send.Call(hwnd, 0x115, 6, 0)
-	after, err := capture("settings-window-restored")
+	after, err := capture()
 	if err != nil {
 		return err
 	}

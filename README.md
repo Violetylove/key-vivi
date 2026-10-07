@@ -12,7 +12,7 @@ Windows 按键可视化工具，适用于录屏、演示和教学。以半透明
 
 ## 使用
 
-目标平台为 Windows 10/11 x64。项目处于开发阶段，可从[发行页面](https://github.com/Violetylove/key-vivi/releases)下载预发行版；开发状态见[项目规格](docs/project_spec.md#里程碑与进度)。
+目标平台为 Windows 10/11 x64。可从[发行页面](https://github.com/Violetylove/key-vivi/releases)下载正式版 `KeyVivi.exe`，无需安装或管理员权限。
 
 下载后直接运行 `KeyVivi.exe`，源码构建产物位于 `dist`。程序在 exe 同目录生成 `keyvivi.yaml`，可通过托盘打开设置窗口调整；手动修改文件后需重启。
 
@@ -23,6 +23,7 @@ Windows 按键可视化工具，适用于录屏、演示和教学。以半透明
 项目使用 Go 与 Win32，通过位图渲染键帽，保持原生窗口和单 exe 交付。
 
 - [贡献规范](docs/CONTRIBUTING.md)：构建、测试、编码和提交。
+- [仓库导航](REPO_MAP.md)：源码、测试与发布入口。
 - [设计文档](docs/architecture.md)：模块职责、数据流和实现约束。
 - [项目规格](docs/project_spec.md)：需求、里程碑、进度和验收。
 - [窗口排查](docs/issue-layered-window.md)：分层窗口的诊断步骤。

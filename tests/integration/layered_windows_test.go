@@ -4,8 +4,6 @@ package integration_test
 
 import (
 	"fmt"
-	"os"
-	"strconv"
 	"testing"
 	"time"
 	"unsafe"
@@ -95,53 +93,4 @@ func TestLayeredWindowAcceptsRenderedBar(t *testing.T) {
 	for _, problem := range problems {
 		t.Error(problem)
 	}
-}
-
-// TestOverlayPreview 在设置 KEYVIVI_SHOW_OVERLAY 时把字幕显示在屏幕底部居中若干秒，
-// 供人工确认真正的半透明、圆角与定位；未设置时跳过。
-//
-// 注意：本测试只能自证"窗口被创建、位图已提交、几何正确"，不能自证肉眼可见。
-// 屏幕上是否真的出现字幕必须由人在真实桌面上确认。
-func TestOverlayPreview(t *testing.T) {
-	if os.Getenv("KEYVIVI_SHOW_OVERLAY") == "" {
-		t.Skip("set KEYVIVI_SHOW_OVERLAY=1 to put the overlay on screen")
-	}
-	seconds := 8
-	if raw := os.Getenv("KEYVIVI_SHOW_OVERLAY"); raw != "1" {
-		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
-			seconds = parsed
-		}
-	}
-	bitmap, err := render.Bar(
-		[]string{"Ctrl+C", "A ×3", "Backspace", "↓"},
-		render.DefaultTheme(), 1, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = platform.Run(func(loop *platform.Loop) error {
-			go func() {
-				time.Sleep(time.Duration(seconds) * time.Second)
-				loop.Quit()
-			}()
-			window, err := platform.NewLayeredWindow()
-			if err != nil {
-				return err
-			}
-			loop.OnCleanup(window.Destroy)
-			// 先给窗口一个尺寸，才能问到它所在的显示器。
-			if err := window.Apply(bitmap, 0, 0); err != nil {
-				return err
-			}
-			x, y, err := platform.OverlayPosition(window.Handle())
-			if err != nil {
-				return err
-			}
-			t.Logf("overlay %dx%d at %d,%d for %ds", bitmap.Bounds().Dx(), bitmap.Bounds().Dy(), x, y, seconds)
-			return window.Apply(bitmap, x, y)
-		}, func(time.Time) bool { return false })
-	}()
-	<-done
 }

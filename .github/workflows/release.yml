@@ -44,7 +44,7 @@ jobs:
       - name: Test with race detector
         env:
           CGO_ENABLED: '1'
-        run: go test -race ./...
+        run: go test -race ./... -count=1
 
       - name: Build Windows x64 executable
         env:

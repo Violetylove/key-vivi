@@ -58,8 +58,10 @@ func TestHookOverflowStillWakesAndStops(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer stop()
+	send := windows.NewLazyDLL("user32.dll").NewProc("keybd_event")
 	for i := 0; i < 8; i++ {
-		platform.SendTestKey()
+		send.Call(0x87, 0, 0, 0)
+		send.Call(0x87, 0, 2, 0)
 	}
 	deadline := time.After(2 * time.Second)
 	for platform.HookDroppedCount() == before {
@@ -75,29 +77,5 @@ func TestHookOverflowStillWakesAndStops(t *testing.T) {
 	case <-stopped:
 	case <-time.After(2 * time.Second):
 		t.Fatal("overflow prevented hook shutdown")
-	}
-}
-
-// TestHookSelfCheck 覆盖应用使用的导出自检路径与回调计数，避免
-// TestLiveKeyboardHook 通过、而计数器始终不涨的情况被漏掉。
-func TestHookSelfCheck(t *testing.T) {
-	events := make(chan keyboard.Event, 64)
-	stop, err := platform.StartKeyboardHook(events)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { stop(); close(events) }()
-	go func() {
-		for range events {
-		}
-	}()
-	before := platform.HookEventCount()
-	platform.SendTestKey()
-	deadline := time.Now().Add(2 * time.Second)
-	for platform.HookEventCount() == before && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if after := platform.HookEventCount(); after == before {
-		t.Fatalf("SendTestKey produced no hook events (before=%d after=%d)", before, after)
 	}
 }
