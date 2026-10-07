@@ -54,7 +54,7 @@ go test -race -tags integration ./internal/app ./tests/integration -count=1 -v -
 | `KEYVIVI_ANIMATION_PREVIEW=1` | `go test ./internal/app -run 'Preview$' -count=1` |
 | `KEYVIVI_MEASURE_CADENCE=1` | `go test -tags integration ./tests/integration -run '^TestLoopCadence$' -count=1 -v -timeout=15s` |
 
-预览写入 `tests/artifacts`。帧间隔测量不包含渲染与桌面合成；正式验收要求见[项目规格](project_spec.md#验收条件)。
+预览写入 `tests/artifacts`。帧间隔测量不包含渲染与桌面合成；本轮收尾范围见[项目规格](project_spec.md#验收条件)。
 
 实际 exe 的进程外验收需先构建，并从普通用户交互式桌面执行；受限代理桌面不能替代该环境。测试复制 exe 到独立临时目录，不改用户配置：
 
@@ -69,11 +69,11 @@ Remove-Item Env:KEYVIVI_EXE, Env:KEYVIVI_ARTIFACT_DIR, Env:KEYVIVI_MEASURE_STABI
 
 稳定性默认空闲和快速输入各 600 秒，每 10 秒记录 CPU 时间、工作集、私有内存及进程/GDI/USER 句柄到 `stability.jsonl`，并检查 UI 响应。CPU 百分比按逻辑处理器数归一化；资源样本需审阅趋势，不以测试返回成功代替无增长结论。空闲期间检测到按键时不得记为纯空闲通过。快速输入为每秒约 30 次，仅向同时拥有前台与键盘焦点的专用测试窗口注入，修饰键按住或焦点移出时停止；自动取得焦点失败时等待人工点击最多 60 秒，输入量不足会失败。接收计数覆盖普通及系统按键消息，另记录系统按键与输入法消息数量，以辅助定位差异，不记录按键内容。
 
-可用 `KEYVIVI_STABILITY_PHASE=idle` 或 `rapid` 单独测量一段；`KEYVIVI_STABILITY_SECONDS`（5–3600）仅用于调试测量工具，短测不能替代每段 10 分钟验收。用完后清除这些环境变量。生命周期测试覆盖消息循环正常退出、窗口/托盘移除及热键释放；托盘恢复测试模拟条目丢失和 `TaskbarCreated` 通知，不等同于真实 Explorer 重启或人工点击退出。
+可用 `KEYVIVI_STABILITY_PHASE=idle` 或 `rapid` 单独测量一段；`KEYVIVI_STABILITY_SECONDS`（5–3600）用于调试测量工具，短测不能记为完成 10 分钟测量。用完后清除这些环境变量。这些工具可选，不增加本轮强制验收项目。生命周期测试覆盖消息循环正常退出、窗口/托盘移除及热键释放；托盘恢复测试模拟条目丢失和 `TaskbarCreated` 通知，不等同于真实 Explorer 重启或人工点击退出。
 
 ## 发行
 
-推送 `v*` 标签触发[发行工作流](../.github/workflows/release.yml)：Windows x64 上检查格式、执行 vet 和竞态测试，直接 `go build`，通过 `softprops/action-gh-release` 上传 `KeyVivi.exe` 并生成发行说明。含 `-` 的标签标为预发行版，例如 `v0.1.0-rc.1`。原生桌面验收仍按[规格](project_spec.md#验收条件)执行。
+推送 `v*` 标签触发[发行工作流](../.github/workflows/release.yml)：Windows x64 上检查格式、执行 vet 和竞态测试，直接 `go build`，通过 `softprops/action-gh-release` 上传 `KeyVivi.exe` 并生成发行说明。含 `-` 的标签标为预发行版，例如 `v0.1.0-rc.1`；预发行版不进入 GitHub 的正式版 `latest` 查询。发布前收尾检查见[规格](project_spec.md#验收条件)。
 
 确认发布条件后创建并推送标签，例如：
 
