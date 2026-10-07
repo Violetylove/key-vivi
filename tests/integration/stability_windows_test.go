@@ -34,6 +34,8 @@ type stabilitySample struct {
 	KeyboardEvents   uint64  `json:"keyboard_events"`
 	SentKeys         uint64  `json:"sent_keys"`
 	ReceivedKeys     uint64  `json:"received_keys"`
+	SystemKeys       uint64  `json:"system_keys"`
+	IMECompositions  uint64  `json:"ime_compositions"`
 	ForegroundPauses uint64  `json:"foreground_pauses"`
 	OverlayVisible   bool    `json:"overlay_visible"`
 }
@@ -167,6 +169,8 @@ func TestExecutableStability(t *testing.T) {
 				}
 				if sink != nil {
 					sample.ReceivedKeys = sink.received.Load()
+					sample.SystemKeys = sink.systemKeys.Load()
+					sample.IMECompositions = sink.imeCompositions.Load()
 				}
 				if err := encoder.Encode(sample); err != nil {
 					ticker.Stop()
@@ -200,7 +204,7 @@ func TestExecutableStability(t *testing.T) {
 				time.Sleep(time.Millisecond)
 			}
 			if sink.received.Load() < sent {
-				t.Fatalf("foreground sink lost injected events: sent=%d received=%d", sent, sink.received.Load())
+				t.Fatalf("foreground sink lost injected events: sent=%d received=%d system_keys=%d ime_compositions=%d", sent, sink.received.Load(), sink.systemKeys.Load(), sink.imeCompositions.Load())
 			}
 			sink.close()
 		}
@@ -209,10 +213,12 @@ func TestExecutableStability(t *testing.T) {
 }
 
 type acceptanceInputSink struct {
-	hwnd     uintptr
-	received atomic.Uint64
-	done     chan struct{}
-	closed   atomic.Bool
+	hwnd            uintptr
+	received        atomic.Uint64
+	systemKeys      atomic.Uint64
+	imeCompositions atomic.Uint64
+	done            chan struct{}
+	closed          atomic.Bool
 }
 
 type acceptanceWindowClass struct {
@@ -233,6 +239,12 @@ type acceptanceMessage struct {
 	private        uint32
 }
 
+type acceptanceGUIThreadInfo struct {
+	size, flags                                   uint32
+	active, focus, capture, menu, moveSize, caret uintptr
+	caretRect                                     [4]int32
+}
+
 func newAcceptanceInputSink(t *testing.T) *acceptanceInputSink {
 	t.Helper()
 	sink := &acceptanceInputSink{done: make(chan struct{})}
@@ -244,8 +256,15 @@ func newAcceptanceInputSink(t *testing.T) *acceptanceInputSink {
 		instance, _, _ := windows.NewLazyDLL("kernel32.dll").NewProc("GetModuleHandleW").Call(0)
 		className := windows.StringToUTF16Ptr(fmt.Sprintf("KeyViviAcceptanceInput-%d", os.Getpid()))
 		callback := syscall.NewCallback(func(hwnd, message, wParam, lParam uintptr) uintptr {
-			if message == 0x100 {
+			// 无焦点时按键可能作为 WM_SYSKEYDOWN 到达活动窗口，也属于实际收到的输入。
+			if message == 0x100 || message == 0x104 {
 				sink.received.Add(1)
+			}
+			if message == 0x104 {
+				sink.systemKeys.Add(1)
+			}
+			if message == 0x10f {
+				sink.imeCompositions.Add(1)
 			}
 			if message == 2 {
 				acceptanceUser32.NewProc("PostQuitMessage").Call(0)
@@ -301,7 +320,17 @@ func newAcceptanceInputSink(t *testing.T) *acceptanceInputSink {
 
 func (s *acceptanceInputSink) isForeground() bool {
 	hwnd, _, _ := acceptanceUser32.NewProc("GetForegroundWindow").Call()
-	return hwnd == s.hwnd
+	if hwnd != s.hwnd {
+		return false
+	}
+	// 前台切换完成前键盘焦点可能尚未迁移，不能仅凭前台 HWND 开始注入。
+	thread, _, _ := acceptanceUser32.NewProc("GetWindowThreadProcessId").Call(s.hwnd, 0)
+	if thread == 0 {
+		return false
+	}
+	info := acceptanceGUIThreadInfo{size: uint32(unsafe.Sizeof(acceptanceGUIThreadInfo{}))}
+	ret, _, _ := acceptanceUser32.NewProc("GetGUIThreadInfo").Call(thread, uintptr(unsafe.Pointer(&info)))
+	return ret != 0 && info.active == s.hwnd && info.focus == s.hwnd
 }
 
 func (s *acceptanceInputSink) close() {

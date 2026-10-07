@@ -67,7 +67,7 @@ go test -race -tags integration ./tests/integration -run '^TestExecutableStabili
 Remove-Item Env:KEYVIVI_EXE, Env:KEYVIVI_ARTIFACT_DIR, Env:KEYVIVI_MEASURE_STABILITY
 ```
 
-稳定性默认空闲和快速输入各 600 秒，每 10 秒记录 CPU 时间、工作集、私有内存及进程/GDI/USER 句柄到 `stability.jsonl`，并检查 UI 响应。CPU 百分比按逻辑处理器数归一化；资源样本需审阅趋势，不以测试返回成功代替无增长结论。空闲期间检测到按键时不得记为纯空闲通过。快速输入为每秒约 30 次，仅向拥有前台的专用测试窗口注入，修饰键按住或切换窗口时停止；自动取得前台失败时等待人工点击最多 60 秒，输入量不足会失败。
+稳定性默认空闲和快速输入各 600 秒，每 10 秒记录 CPU 时间、工作集、私有内存及进程/GDI/USER 句柄到 `stability.jsonl`，并检查 UI 响应。CPU 百分比按逻辑处理器数归一化；资源样本需审阅趋势，不以测试返回成功代替无增长结论。空闲期间检测到按键时不得记为纯空闲通过。快速输入为每秒约 30 次，仅向同时拥有前台与键盘焦点的专用测试窗口注入，修饰键按住或焦点移出时停止；自动取得焦点失败时等待人工点击最多 60 秒，输入量不足会失败。接收计数覆盖普通及系统按键消息，另记录系统按键与输入法消息数量，以辅助定位差异，不记录按键内容。
 
 可用 `KEYVIVI_STABILITY_PHASE=idle` 或 `rapid` 单独测量一段；`KEYVIVI_STABILITY_SECONDS`（5–3600）仅用于调试测量工具，短测不能替代每段 10 分钟验收。用完后清除这些环境变量。生命周期测试覆盖消息循环正常退出、窗口/托盘移除及热键释放；托盘恢复测试模拟条目丢失和 `TaskbarCreated` 通知，不等同于真实 Explorer 重启或人工点击退出。
 
